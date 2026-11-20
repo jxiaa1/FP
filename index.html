@@ -86,12 +86,19 @@
     border-top: 1px solid rgba(255,255,255,.1);
     padding: 12px 16px; z-index: 50;
     align-items: center; justify-content: center; gap: 14px; font-size: 13px;
+    flex-wrap: wrap;
   }
   #myBar b { color: #d4af37; }
   #myBar button {
     font-size: 12px; padding: 7px 14px;
     background: rgba(255,82,82,.15); border-color: rgba(255,82,82,.35); color: #ff9c9c;
   }
+  #myBar button.reveal {
+    background: rgba(212,175,55,.15);
+    border-color: rgba(212,175,55,.45);
+    color: #d4af37;
+  }
+  #myBar button.reveal:hover:not(:disabled) { background: rgba(212,175,55,.25); }
 
   #table {
     max-width: 1200px; margin: 16px auto 0;
@@ -291,6 +298,7 @@
 
 <div id="myBar">
   <span>我的座位：<b id="mySeatName">-</b></span>
+  <button id="revealBtn" class="reveal">开牌</button>
   <button id="leaveBtn">让出座位</button>
 </div>
 
@@ -324,6 +332,7 @@
   const pickerListEl = document.getElementById('pickerList');
   const myBarEl = document.getElementById('myBar');
   const mySeatNameEl = document.getElementById('mySeatName');
+  const revealBtn = document.getElementById('revealBtn');
   const gameInfoEl = document.getElementById('gameInfo');
 
   const socket = io();
@@ -394,6 +403,12 @@
       if (mySeat.eliminated) st = '已淘汰';
       else if (mySeat.folded) st = '已弃牌';
       document.getElementById('myStatus').textContent = st;
+
+      // 开牌按钮状态
+      const hasCards = mySeat.cards.length > 0;
+      const allRevealed = hasCards && mySeat.cards.every(c => c.faceUp);
+      revealBtn.disabled = !hasCards || allRevealed;
+      revealBtn.textContent = allRevealed ? '已开牌' : '开牌';
     } else {
       mySep.style.display = 'none';
       document.getElementById('myChipsWrap').style.display = 'none';
@@ -776,6 +791,12 @@
       if (act === 'reset' && !confirm('确定重置整个游戏？所有玩家筹码将回到 40，轮次从第 1 轮开始。')) return;
       socket.emit('host:action', { type: act });
     });
+  });
+
+  revealBtn.addEventListener('click', () => {
+    if (!confirm('开牌后所有玩家都能看到你的牌，且不可撤回。确定开牌吗？')) return;
+    socket.emit('player:revealAll');
+    localReveal.clear();
   });
 
   document.getElementById('leaveBtn').addEventListener('click', () => {
