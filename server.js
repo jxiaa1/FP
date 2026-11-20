@@ -10,6 +10,9 @@ const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 const HOST_KEY = process.env.HOST_KEY || 'admin888';
 const CARDS_PER_SEAT = 5;
+const INITIAL_CHIPS = 40;
+const MAX_ROUNDS = 3;
+const MAX_BET = 5;
 
 app.use(express.static(__dirname));
 
@@ -32,9 +35,20 @@ function createRoom() {
     id: i,
     name: `玩家 ${i + 1}`,
     cards: [],
-    occupant: null
+    occupant: null,
+    chips: INITIAL_CHIPS,
+    bet: 0,
+    folded: false,
+    eliminated: false
   }));
-  const room = { seats, deck: makeDeck() };
+  const room = {
+    seats,
+    deck: makeDeck(),
+    pot: 0,
+    round: 1,
+    phase: 'betting', // betting | showdown | finished
+    winnerSeatId: null
+  };
   recalc(room);
   return room;
 }
@@ -62,13 +76,22 @@ function stateFor(socket) {
     total: room.total,
     remaining: room.remaining,
     cardsPerSeat: CARDS_PER_SEAT,
+    round: room.round,
+    maxRounds: MAX_ROUNDS,
+    pot: room.pot,
+    phase: room.phase,
+    winnerSeatId: room.winnerSeatId,
+    initialChips: INITIAL_CHIPS,
     seats: room.seats.map(s => ({
       id: s.id,
       name: s.name,
       occupied: !!s.occupant,
       isMine: s.id === mySeat,
+      chips: s.chips,
+      bet: s.bet,
+      folded: s.folded,
+      eliminated: s.eliminated,
       cards: s.cards.map(c => {
-        // 主控能看到所有牌；其他人只能看到公开的牌
         const canSee = isHost || c.faceUp;
         return {
           faceUp: c.faceUp,
@@ -90,10 +113,9 @@ function broadcastAll(roomName) {
 }
 
 /* ---------- 发牌 ---------- */
-
-// 所有人各发一张
 function dealOneEach(room) {
   for (const seat of room.seats) {
+    if (seat.eliminated || seat.folded) continue;
     if (seat.cards.length >= CARDS_PER_SEAT) continue;
     const card = room.deck.pop();
     if (!card) break;
@@ -103,20 +125,15 @@ function dealOneEach(room) {
   recalc(room);
 }
 
-// 一次发完
 function dealAll(room) {
   let guard = 0;
-  while (
-    room.seats.some(s => s.cards.length < CARDS_PER_SEAT) &&
-    guard < 1000
-  ) {
+  while (room.seats.some(s => !s.eliminated && !s.folded && s.cards.length < CARDS_PER_SEAT) && guard < 1000) {
     dealOneEach(room);
     guard++;
   }
 }
 
 /* ---------- 连接 ---------- */
-
 io.on('connection', (socket) => {
 
   socket.on('join', ({ room, host, key, token }) => {
@@ -125,7 +142,6 @@ io.on('connection', (socket) => {
     socket.data.token = token || null;
     socket.data.seatId = null;
 
-    // 玩家刷新后，凭 token 自动恢复座位
     if (!socket.data.isHost && token) {
       const r = getRoom(socket.data.room);
       const seat = r.seats.find(s => s.occupant === token);
@@ -143,28 +159,111 @@ io.on('connection', (socket) => {
     const room = getRoom(socket.data.room);
 
     switch (action.type) {
+
       case 'dealOneEach':
+        if (room.phase !== 'betting') return;
         dealOneEach(room);
         break;
+
       case 'dealAll':
+        if (room.phase !== 'betting') return;
         dealAll(room);
         break;
+
       case 'revealAll':
         room.seats.forEach(s => s.cards.forEach(c => { c.faceUp = true; }));
         break;
+
+      case 'setAllBets': {
+        if (room.phase !== 'betting') return;
+        const amount = parseInt(action.amount, 10);
+        if (isNaN(amount) || amount < 1 || amount > MAX_BET) {
+          socket.emit('host:msg', `下注额必须为 1 到 ${MAX_BET}`);
+          return;
+        }
+        let any = false;
+        for (const seat of room.seats) {
+          if (seat.eliminated || seat.folded) continue;
+          if (seat.chips < amount) {
+            seat.folded = true; // 筹码不足自动弃牌
+            continue;
+          }
+          seat.chips -= amount;
+          seat.bet += amount;
+          room.pot += amount;
+          any = true;
+        }
+        if (!any) socket.emit('host:msg', '没有玩家可以下注');
+        break;
+      }
+
+      case 'foldSeat': {
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat || seat.eliminated) return;
+        seat.folded = true;
+        break;
+      }
+
+      case 'declareWinner': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '本轮已结算，请开始下一轮');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat || seat.eliminated || seat.folded) {
+          socket.emit('host:msg', '该玩家无法获胜（已弃牌/已淘汰）');
+          return;
+        }
+        seat.chips += room.pot;
+        room.winnerSeatId = seat.id;
+        room.pot = 0;
+        room.phase = 'showdown';
+        break;
+      }
+
+      case 'nextRound': {
+        if (room.phase !== 'showdown') {
+          socket.emit('host:msg', '请先宣布本轮赢家');
+          return;
+        }
+        if (room.round >= MAX_ROUNDS) {
+          room.phase = 'finished';
+          break;
+        }
+        room.round++;
+        room.deck = makeDeck();
+        room.pot = 0;
+        room.winnerSeatId = null;
+        room.phase = 'betting';
+        for (const seat of room.seats) {
+          seat.cards = [];
+          seat.bet = 0;
+          seat.folded = false;
+          if (seat.chips <= 0) seat.eliminated = true;
+        }
+        recalc(room);
+        // 若所有座位都被淘汰则直接结束
+        if (room.seats.every(s => s.eliminated)) room.phase = 'finished';
+        break;
+      }
+
       case 'reset': {
         const fresh = createRoom();
-        // 保留座位名称与占用者
         fresh.seats = room.seats.map(s => ({
           id: s.id,
           name: s.name,
           cards: [],
-          occupant: s.occupant
+          occupant: s.occupant,
+          chips: INITIAL_CHIPS,
+          bet: 0,
+          folded: false,
+          eliminated: false
         }));
         recalc(fresh);
         rooms.set(socket.data.room, fresh);
         break;
       }
+
       case 'rename': {
         const seat = room.seats.find(s => s.id === action.seatId);
         if (seat && typeof action.name === 'string') {
@@ -172,25 +271,30 @@ io.on('connection', (socket) => {
         }
         break;
       }
+
       case 'toggle': {
         const seat = room.seats.find(s => s.id === action.seatId);
         const card = seat && seat.cards[action.index];
         if (card) card.faceUp = !card.faceUp;
         break;
       }
+
       case 'addSeat': {
-        const nextId = room.seats.length
-          ? Math.max(...room.seats.map(s => s.id)) + 1
-          : 0;
+        const nextId = room.seats.length ? Math.max(...room.seats.map(s => s.id)) + 1 : 0;
         room.seats.push({
           id: nextId,
           name: `玩家 ${room.seats.length + 1}`,
           cards: [],
-          occupant: null
+          occupant: null,
+          chips: INITIAL_CHIPS,
+          bet: 0,
+          folded: false,
+          eliminated: false
         });
         recalc(room);
         break;
       }
+
       case 'removeSeat': {
         if (room.seats.length <= 1) {
           socket.emit('host:msg', '至少保留一个座位');
@@ -214,19 +318,14 @@ io.on('connection', (socket) => {
 
   /* ---------- 玩家选座 ---------- */
   socket.on('player:seat', ({ seatId, token }) => {
-    if (socket.data.isHost) return;
-    if (!socket.data.room) return;
+    if (socket.data.isHost || !socket.data.room) return;
     const room = getRoom(socket.data.room);
     const seat = room.seats.find(s => s.id === seatId);
-    if (!seat) {
-      socket.emit('seat:error', '座位不存在');
-      return;
-    }
+    if (!seat) { socket.emit('seat:error', '座位不存在'); return; }
+    if (seat.eliminated) { socket.emit('seat:error', '该座位玩家已被淘汰'); return; }
     if (seat.occupant && seat.occupant !== token) {
-      socket.emit('seat:error', '该座位已被其他玩家占用');
-      return;
+      socket.emit('seat:error', '该座位已被其他玩家占用'); return;
     }
-    // 换座时释放旧座位
     if (socket.data.seatId != null && socket.data.seatId !== seatId) {
       const old = room.seats.find(s => s.id === socket.data.seatId);
       if (old && old.occupant === socket.data.token) old.occupant = null;
@@ -245,12 +344,7 @@ io.on('connection', (socket) => {
     const seat = room.seats.find(s => s.id === seatId);
     const card = seat && seat.cards[index];
     if (!card) return;
-    socket.emit('peek:result', {
-      seatId,
-      index,
-      rank: card.rank,
-      suit: card.suit
-    });
+    socket.emit('peek:result', { seatId, index, rank: card.rank, suit: card.suit });
   });
 
   /* ---------- 玩家让出座位 ---------- */
@@ -269,7 +363,6 @@ io.on('connection', (socket) => {
     const token = socket.data.token;
     const seatId = socket.data.seatId;
     if (!roomName || seatId == null || !token) return;
-
     setTimeout(() => {
       const room = rooms.get(roomName);
       if (!room) return;
@@ -278,10 +371,7 @@ io.on('connection', (socket) => {
       if (ids) {
         for (const id of ids) {
           const s = io.sockets.sockets.get(id);
-          if (s && s.data.token === token && s.data.seatId === seatId) {
-            stillOnline = true;
-            break;
-          }
+          if (s && s.data.token === token && s.data.seatId === seatId) { stillOnline = true; break; }
         }
       }
       if (!stillOnline) {
@@ -299,7 +389,6 @@ server.listen(PORT, () => {
   console.log(`服务器已启动，端口 ${PORT}`);
 });
 
-// 防止 Render 免费实例休眠
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
 if (SELF_URL) {
   setInterval(() => {
