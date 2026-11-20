@@ -5,7 +5,16 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// 方案2：开启 Socket.IO 连接状态恢复
+// 断线 2 分钟内重连，socket.id / socket.data / 房间归属会被自动还原
+const RECOVERY_MS = 2 * 60 * 1000;
+const io = new Server(server, {
+  connectionStateRecovery: {
+    maxDisconnectionDuration: RECOVERY_MS,
+    skipMiddlewares: true,
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 const HOST_KEY = process.env.HOST_KEY || 'admin888';
@@ -13,6 +22,10 @@ const CARDS_PER_SEAT = 5;
 const INITIAL_CHIPS = 40;
 const MAX_ROUNDS = 3;
 const MAX_BET = 5;
+
+// 方案1：玩家断线后座位保留时长
+// 2 小时内回来，凭浏览器 localStorage 里的 token 自动坐回原位
+const DISCONNECT_KEEP_MS = 2 * 60 * 60 * 1000;
 
 app.use(express.static(__dirname));
 
@@ -144,7 +157,14 @@ io.on('connection', (socket) => {
     socket.data.room = String(room || 'default').slice(0, 32) || 'default';
     socket.data.isHost = !!host && key === HOST_KEY;
     socket.data.token = token || null;
-    socket.data.seatId = null;
+
+    // 方案2：如果 socket 恢复成功，socket.data.seatId 已经被保留
+    // 但为了兼容方案1（超过2分钟的重连），仍然用 token 再确认一次座位
+    if (socket.recovered && socket.data.seatId != null) {
+      // 恢复连接：保留原有 seatId
+    } else {
+      socket.data.seatId = null;
+    }
 
     if (!socket.data.isHost && token) {
       const r = getRoom(socket.data.room);
@@ -177,7 +197,6 @@ io.on('connection', (socket) => {
         room.seats.forEach(s => s.cards.forEach(c => { c.faceUp = true; }));
         break;
 
-      /* 单次下注：累加到该座位本轮下注额 */
       case 'setSeatBet': {
         if (room.phase !== 'betting') {
           socket.emit('host:msg', '当前不是下注阶段');
@@ -185,14 +204,8 @@ io.on('connection', (socket) => {
         }
         const seat = room.seats.find(s => s.id === action.seatId);
         if (!seat) return;
-        if (seat.eliminated) {
-          socket.emit('host:msg', '该玩家已被淘汰，无法下注');
-          return;
-        }
-        if (seat.folded) {
-          socket.emit('host:msg', '该玩家已弃牌，无法下注');
-          return;
-        }
+        if (seat.eliminated) { socket.emit('host:msg', '该玩家已被淘汰，无法下注'); return; }
+        if (seat.folded) { socket.emit('host:msg', '该玩家已弃牌，无法下注'); return; }
         const amount = parseInt(action.amount, 10);
         if (isNaN(amount) || amount < 1 || amount > MAX_BET) {
           socket.emit('host:msg', `单次下注必须为 1 到 ${MAX_BET} 枚`);
@@ -209,7 +222,6 @@ io.on('connection', (socket) => {
         break;
       }
 
-      /* 重复投注：按该玩家上次下注金额再下一注 */
       case 'repeatBet': {
         if (room.phase !== 'betting') {
           socket.emit('host:msg', '当前不是下注阶段');
@@ -217,14 +229,8 @@ io.on('connection', (socket) => {
         }
         const seat = room.seats.find(s => s.id === action.seatId);
         if (!seat) return;
-        if (seat.eliminated) {
-          socket.emit('host:msg', '该玩家已被淘汰，无法下注');
-          return;
-        }
-        if (seat.folded) {
-          socket.emit('host:msg', '该玩家已弃牌，无法下注');
-          return;
-        }
+        if (seat.eliminated) { socket.emit('host:msg', '该玩家已被淘汰，无法下注'); return; }
+        if (seat.folded) { socket.emit('host:msg', '该玩家已弃牌，无法下注'); return; }
         const amount = seat.lastBetAmount || 0;
         if (amount < 1) {
           socket.emit('host:msg', '该玩家还没有下注记录，无法重复投注');
@@ -282,7 +288,6 @@ io.on('connection', (socket) => {
           seat.cards = [];
           seat.bet = 0;
           seat.folded = false;
-          // lastBetAmount 保留，下一轮可直接重复上次金额
           if (seat.chips <= 0) seat.eliminated = true;
         }
         recalc(room);
@@ -399,20 +404,27 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
+  // 方案1：断线后座位保留 DISCONNECT_KEEP_MS（2 小时）
   socket.on('disconnect', () => {
     const roomName = socket.data.room;
     const token = socket.data.token;
     const seatId = socket.data.seatId;
     if (!roomName || seatId == null || !token) return;
+
     setTimeout(() => {
       const room = rooms.get(roomName);
       if (!room) return;
+
+      // 检查该 token 是否还有在线连接占着同一个座位
       const ids = io.sockets.adapter.rooms.get(roomName);
       let stillOnline = false;
       if (ids) {
         for (const id of ids) {
           const s = io.sockets.sockets.get(id);
-          if (s && s.data.token === token && s.data.seatId === seatId) { stillOnline = true; break; }
+          if (s && s.data.token === token && s.data.seatId === seatId) {
+            stillOnline = true;
+            break;
+          }
         }
       }
       if (!stillOnline) {
@@ -422,7 +434,7 @@ io.on('connection', (socket) => {
           broadcastAll(roomName);
         }
       }
-    }, 60000);
+    }, DISCONNECT_KEEP_MS);
   });
 });
 
