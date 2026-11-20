@@ -42,7 +42,6 @@
     border-radius: 12px; padding: 10px 12px;
   }
   .ctrl-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .ctrl-label { font-size: 12px; color: #8fa8a0; margin-right: 2px; }
   button {
     font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 8px;
     cursor: pointer; border: 1px solid rgba(255,255,255,.16);
@@ -96,7 +95,7 @@
 
   #table {
     max-width: 1200px; margin: 16px auto 0;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
     gap: 12px;
   }
   .seat {
@@ -147,7 +146,7 @@
 
   .seat-stats {
     display: flex; gap: 14px; font-size: 12px; color: #8fa8a0;
-    margin-bottom: 8px; padding: 0 2px;
+    margin-bottom: 8px; padding: 0 2px; flex-wrap: wrap;
   }
   .seat-stats b { color: #d4af37; font-weight: 600; }
   .seat-stats .bet b { color: #3ddc84; }
@@ -199,6 +198,7 @@
     display: none;
     gap: 6px; align-items: center; margin-top: 10px;
     padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.1);
+    flex-wrap: wrap;
   }
   .bet-row.show { display: flex; }
   .bet-row .bet-label { font-size: 11.5px; color: #8fa8a0; white-space: nowrap; }
@@ -214,11 +214,11 @@
     white-space: nowrap;
   }
   .bet-row button:hover:not(:disabled) { background: rgba(61,220,132,.25); }
-  .bet-row button.rebet {
+  .bet-row button.repeat {
     background: rgba(212,175,55,.15);
     border-color: rgba(212,175,55,.45); color: #d4af37;
   }
-  .bet-row button.rebet:hover:not(:disabled) { background: rgba(212,175,55,.25); }
+  .bet-row button.repeat:hover:not(:disabled) { background: rgba(212,175,55,.25); }
 
   .seat-actions {
     display: none; gap: 6px; margin-top: 8px;
@@ -257,7 +257,7 @@
   <span id="winnerWrap" style="display:none">本轮赢家：<b id="winnerName"></b></span>
   <span class="sep" id="mySep" style="display:none">|</span>
   <span id="myChipsWrap" style="display:none">我的筹码 <b id="myChips">40</b></span>
-  <span id="myBetWrap" style="display:none">本轮下注 <b id="myBet">0</b></span>
+  <span id="myBetWrap" style="display:none">本轮已下注 <b id="myBet">0</b></span>
   <span id="myStatusWrap" style="display:none">状态 <b id="myStatus">正常</b></span>
   <span id="finishedWrap" class="finished" style="display:none">游戏已结束</span>
 </div>
@@ -490,7 +490,7 @@
     const stats = document.createElement('div');
     stats.className = 'seat-stats';
     stats.innerHTML = '<span class="chips">筹码 <b>40</b></span>' +
-                      '<span class="bet">下注 <b>0</b></span>';
+                      '<span class="bet">本轮下注 <b>0</b></span>';
 
     const cardsEl = document.createElement('div');
     cardsEl.className = 'cards';
@@ -511,7 +511,7 @@
     }
 
     /* 下注行（主控可见） */
-    let betRow = null, betSelect = null, betBtn = null;
+    let betRow = null, betSelect = null, betBtn = null, repeatBtn = null;
     if (isHost) {
       betRow = document.createElement('div');
       betRow.className = 'bet-row';
@@ -538,7 +538,14 @@
         });
       });
 
-      betRow.append(lbl, betSelect, betBtn);
+      repeatBtn = document.createElement('button');
+      repeatBtn.className = 'repeat';
+      repeatBtn.textContent = '重复投注';
+      repeatBtn.addEventListener('click', () => {
+        socket.emit('host:action', { type: 'repeatBet', seatId });
+      });
+
+      betRow.append(lbl, betSelect, betBtn, repeatBtn);
     }
 
     /* 操作按钮（主控可见） */
@@ -569,7 +576,7 @@
     if (betRow) root.append(betRow);
     if (actions) root.append(actions);
 
-    return { root, nameEl, badge, stats, cards, betRow, betSelect, betBtn, actions, foldBtn, winBtn, lastBet: 0 };
+    return { root, nameEl, badge, stats, cards, betRow, betSelect, betBtn, repeatBtn, actions, foldBtn, winBtn };
   }
 
   function updateSeat(el, seat, state) {
@@ -627,36 +634,26 @@
 
       const betting = state.phase === 'betting';
       const canBet = betting && !seat.eliminated && !seat.folded && seat.chips >= 1;
-      const canAct = betting && !seat.eliminated && !seat.folded;
 
-      // 同步下拉选择：只有在 seat.bet 真正变化时才覆盖，避免打断正在选择的主控
-      if (el.lastBet !== seat.bet) {
-        el.lastBet = seat.bet;
-        const target = seat.bet > 0 ? String(seat.bet) : '1';
-        if (el.betSelect.value !== target) el.betSelect.value = target;
-      }
-
-      const maxAllowed = Math.min(state.maxBet || 5, Math.max(1, seat.chips + seat.bet));
-      // 若玩家筹码较少，禁用超过可承受的选项
+      // 选项禁用：超过剩余筹码的档位不可选
       Array.from(el.betSelect.options).forEach(opt => {
-        opt.disabled = parseInt(opt.value, 10) > maxAllowed;
+        opt.disabled = parseInt(opt.value, 10) > seat.chips;
       });
-      if (parseInt(el.betSelect.value, 10) > maxAllowed) {
+      if (parseInt(el.betSelect.value, 10) > seat.chips) {
+        const maxAllowed = Math.max(1, Math.min(5, seat.chips));
         el.betSelect.value = String(maxAllowed);
       }
 
       el.betSelect.disabled = !canBet;
       el.betBtn.disabled = !canBet;
-      if (seat.bet > 0) {
-        el.betBtn.textContent = '改注';
-        el.betBtn.classList.add('rebet');
-      } else {
-        el.betBtn.textContent = '下注';
-        el.betBtn.classList.remove('rebet');
-      }
 
-      if (el.foldBtn) el.foldBtn.disabled = !canAct;
-      if (el.winBtn) el.winBtn.disabled = !canAct;
+      const last = seat.lastBetAmount || 0;
+      const canRepeat = canBet && last > 0 && seat.chips >= last;
+      el.repeatBtn.disabled = !canRepeat;
+      el.repeatBtn.textContent = last > 0 ? `重复 ${last} 枚` : '重复投注';
+
+      if (el.foldBtn) el.foldBtn.disabled = !betting || seat.eliminated || seat.folded;
+      if (el.winBtn) el.winBtn.disabled = !betting || seat.eliminated || seat.folded;
     }
   }
 
