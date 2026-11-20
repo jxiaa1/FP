@@ -6,8 +6,6 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// 方案2：开启 Socket.IO 连接状态恢复
-// 断线 2 分钟内重连，socket.id / socket.data / 房间归属会被自动还原
 const RECOVERY_MS = 2 * 60 * 1000;
 const io = new Server(server, {
   connectionStateRecovery: {
@@ -23,8 +21,6 @@ const INITIAL_CHIPS = 40;
 const MAX_ROUNDS = 3;
 const MAX_BET = 5;
 
-// 方案1：玩家断线后座位保留时长
-// 2 小时内回来，凭浏览器 localStorage 里的 token 自动坐回原位
 const DISCONNECT_KEEP_MS = 2 * 60 * 60 * 1000;
 
 app.use(express.static(__dirname));
@@ -158,8 +154,6 @@ io.on('connection', (socket) => {
     socket.data.isHost = !!host && key === HOST_KEY;
     socket.data.token = token || null;
 
-    // 方案2：如果 socket 恢复成功，socket.data.seatId 已经被保留
-    // 但为了兼容方案1（超过2分钟的重连），仍然用 token 再确认一次座位
     if (socket.recovered && socket.data.seatId != null) {
       // 恢复连接：保留原有 seatId
     } else {
@@ -395,6 +389,18 @@ io.on('connection', (socket) => {
     socket.emit('peek:result', { seatId, index, rank: card.rank, suit: card.suit });
   });
 
+  /* 玩家开牌：把自己座位上的所有牌公开给所有人 */
+  socket.on('player:revealAll', () => {
+    if (socket.data.isHost || !socket.data.room) return;
+    if (socket.data.seatId == null) return;
+    const room = getRoom(socket.data.room);
+    const seat = room.seats.find(s => s.id === socket.data.seatId);
+    if (!seat || seat.eliminated) return;
+    if (seat.cards.length === 0) return;
+    seat.cards.forEach(c => { c.faceUp = true; });
+    broadcastAll(socket.data.room);
+  });
+
   socket.on('player:leave', () => {
     if (socket.data.seatId == null) return;
     const room = getRoom(socket.data.room);
@@ -404,7 +410,6 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
-  // 方案1：断线后座位保留 DISCONNECT_KEEP_MS（2 小时）
   socket.on('disconnect', () => {
     const roomName = socket.data.room;
     const token = socket.data.token;
@@ -415,7 +420,6 @@ io.on('connection', (socket) => {
       const room = rooms.get(roomName);
       if (!room) return;
 
-      // 检查该 token 是否还有在线连接占着同一个座位
       const ids = io.sockets.adapter.rooms.get(roomName);
       let stillOnline = false;
       if (ids) {
