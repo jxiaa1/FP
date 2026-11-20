@@ -1,819 +1,451 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>发牌桌</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    min-height: 100vh;
-    color: #e6eef0;
-    padding: 14px 14px 90px;
-    background: radial-gradient(ellipse 80% 60% at 50% -10%, #1b4a3a 0%, #0c231c 45%, #060d0a 100%);
-    -webkit-font-smoothing: antialiased;
+const express = require('express');
+const http = require('http');
+const https = require('https');
+const { Server } = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+
+// 方案2：开启 Socket.IO 连接状态恢复
+// 断线 2 分钟内重连，socket.id / socket.data / 房间归属会被自动还原
+const RECOVERY_MS = 2 * 60 * 1000;
+const io = new Server(server, {
+  connectionStateRecovery: {
+    maxDisconnectionDuration: RECOVERY_MS,
+    skipMiddlewares: true,
   }
-  .topbar {
-    display: flex; justify-content: space-between; align-items: center;
-    gap: 12px; flex-wrap: wrap; max-width: 1200px; margin: 0 auto;
+});
+
+const PORT = process.env.PORT || 3000;
+const HOST_KEY = process.env.HOST_KEY || 'admin888';
+const CARDS_PER_SEAT = 5;
+const INITIAL_CHIPS = 40;
+const MAX_ROUNDS = 3;
+const MAX_BET = 5;
+
+// 方案1：玩家断线后座位保留时长
+// 2 小时内回来，凭浏览器 localStorage 里的 token 自动坐回原位
+const DISCONNECT_KEEP_MS = 2 * 60 * 60 * 1000;
+
+app.use(express.static(__dirname));
+
+const rooms = new Map();
+
+function makeDeck() {
+  const suits = ['♠', '♥', '♣', '♦'];
+  const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const deck = [];
+  for (const s of suits) for (const r of ranks) deck.push({ rank: r, suit: s, faceUp: false });
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
   }
-  .brand { font-size: 15px; font-weight: 600; letter-spacing: .5px; color: #d4af37; }
-  .room-tag { font-size: 12px; color: #8fa8a0; margin-left: 8px; font-weight: 400; }
-  .status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #8fa8a0; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; transition: .3s; }
-  .dot.on { background: #3ddc84; box-shadow: 0 0 8px #3ddc84; }
-  .dot.off { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
+  return deck;
+}
 
-  #gameInfo {
-    max-width: 1200px; margin: 12px auto 0;
-    display: none; flex-wrap: wrap; gap: 18px; align-items: center;
-    background: rgba(212,175,55,.08); border: 1px solid rgba(212,175,55,.25);
-    border-radius: 12px; padding: 10px 16px; font-size: 13px; color: #cfe0da;
+function createRoom() {
+  const seats = [0, 1, 2, 3, 4, 5, 6].map(i => ({
+    id: i,
+    name: `玩家 ${i + 1}`,
+    cards: [],
+    occupant: null,
+    chips: INITIAL_CHIPS,
+    bet: 0,
+    lastBetAmount: 0,
+    folded: false,
+    eliminated: false
+  }));
+  const room = {
+    seats,
+    deck: makeDeck(),
+    pot: 0,
+    round: 1,
+    phase: 'betting',
+    winnerSeatId: null
+  };
+  recalc(room);
+  return room;
+}
+
+function recalc(room) {
+  room.total = room.seats.length * CARDS_PER_SEAT;
+  room.remaining = room.seats.reduce(
+    (sum, s) => sum + Math.max(0, CARDS_PER_SEAT - s.cards.length),
+    0
+  );
+}
+
+function getRoom(name) {
+  if (!rooms.has(name)) rooms.set(name, createRoom());
+  return rooms.get(name);
+}
+
+function stateFor(socket) {
+  const room = getRoom(socket.data.room);
+  const isHost = !!socket.data.isHost;
+  const mySeat = socket.data.seatId;
+  return {
+    role: isHost ? 'host' : (mySeat != null ? 'player' : 'spectator'),
+    mySeatId: mySeat != null ? mySeat : null,
+    total: room.total,
+    remaining: room.remaining,
+    cardsPerSeat: CARDS_PER_SEAT,
+    round: room.round,
+    maxRounds: MAX_ROUNDS,
+    pot: room.pot,
+    phase: room.phase,
+    winnerSeatId: room.winnerSeatId,
+    initialChips: INITIAL_CHIPS,
+    maxBet: MAX_BET,
+    seats: room.seats.map(s => ({
+      id: s.id,
+      name: s.name,
+      occupied: !!s.occupant,
+      isMine: s.id === mySeat,
+      chips: s.chips,
+      bet: s.bet,
+      lastBetAmount: s.lastBetAmount || 0,
+      folded: s.folded,
+      eliminated: s.eliminated,
+      cards: s.cards.map(c => {
+        const canSee = isHost || c.faceUp;
+        return {
+          faceUp: c.faceUp,
+          rank: canSee ? c.rank : null,
+          suit: canSee ? c.suit : null
+        };
+      })
+    }))
+  };
+}
+
+function broadcastAll(roomName) {
+  const ids = io.sockets.adapter.rooms.get(roomName);
+  if (!ids) return;
+  for (const id of ids) {
+    const s = io.sockets.sockets.get(id);
+    if (s && s.data.room === roomName) s.emit('state', stateFor(s));
   }
-  #gameInfo b { color: #d4af37; font-weight: 600; }
-  #gameInfo .sep { color: rgba(255,255,255,.15); }
-  #gameInfo .finished { color: #ffd76b; font-weight: 600; }
+}
 
-  #controls {
-    max-width: 1200px; margin: 12px auto 0;
-    display: none; flex-wrap: wrap; gap: 8px; align-items: center;
-    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
-    border-radius: 12px; padding: 10px 12px;
+function dealOneEach(room) {
+  for (const seat of room.seats) {
+    if (seat.eliminated || seat.folded) continue;
+    if (seat.cards.length >= CARDS_PER_SEAT) continue;
+    const card = room.deck.pop();
+    if (!card) break;
+    card.faceUp = seat.cards.length === 0;
+    seat.cards.push(card);
   }
-  .ctrl-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  button {
-    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 8px;
-    cursor: pointer; border: 1px solid rgba(255,255,255,.16);
-    background: rgba(255,255,255,.08); color: #e6eef0;
-    transition: .15s; white-space: nowrap;
+  recalc(room);
+}
+
+function dealAll(room) {
+  let guard = 0;
+  while (
+    room.seats.some(s => !s.eliminated && !s.folded && s.cards.length < CARDS_PER_SEAT) &&
+    guard < 1000
+  ) {
+    dealOneEach(room);
+    guard++;
   }
-  button:hover:not(:disabled) { background: rgba(255,255,255,.16); }
-  button:active:not(:disabled) { transform: translateY(1px); }
-  button:disabled { opacity: .35; cursor: not-allowed; }
-  button.primary { background: linear-gradient(180deg,#d4af37,#b8912b); color: #1a1206; border-color: #e6c65c; font-weight: 600; }
-  button.danger { background: rgba(255,82,82,.15); border-color: rgba(255,82,82,.35); color: #ff9c9c; }
-  button.win { background: rgba(61,220,132,.15); border-color: rgba(61,220,132,.4); color: #3ddc84; }
-  select {
-    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px;
-    background: rgba(255,255,255,.08); color: #e6eef0;
-    border: 1px solid rgba(255,255,255,.16); outline: none;
-  }
-  select option { background: #1a2a22; }
-  .meter { margin-left: auto; font-size: 12px; color: #8fa8a0; display: flex; gap: 14px; align-items: center; }
-  .meter b { color: #d4af37; font-weight: 600; }
+}
 
-  #seatPicker {
-    max-width: 1200px; margin: 14px auto 0;
-    background: rgba(255,255,255,.05); border: 1px solid rgba(212,175,55,.3);
-    border-radius: 12px; padding: 12px 14px;
-  }
-  .picker-title { font-size: 13px; color: #d4af37; margin-bottom: 10px; font-weight: 600; }
-  .picker-list { display: flex; flex-wrap: wrap; gap: 8px; }
-  .picker-item {
-    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
-    border: 1px solid rgba(212,175,55,.4); background: rgba(212,175,55,.1); color: #e6eef0;
-  }
-  .picker-item:hover:not(:disabled) { background: rgba(212,175,55,.22); }
-  .picker-item:disabled, .picker-item.disabled {
-    opacity: .35; cursor: not-allowed;
-    border-color: rgba(255,255,255,.1); background: rgba(255,255,255,.03);
-  }
+io.on('connection', (socket) => {
 
-  #myBar {
-    display: none; position: fixed; left: 0; right: 0; bottom: 0;
-    background: rgba(12,20,16,.94); backdrop-filter: blur(8px);
-    border-top: 1px solid rgba(255,255,255,.1);
-    padding: 12px 16px; z-index: 50;
-    align-items: center; justify-content: center; gap: 14px; font-size: 13px;
-  }
-  #myBar b { color: #d4af37; }
-  #myBar button {
-    font-size: 12px; padding: 7px 14px;
-    background: rgba(255,82,82,.15); border-color: rgba(255,82,82,.35); color: #ff9c9c;
-  }
+  socket.on('join', ({ room, host, key, token }) => {
+    socket.data.room = String(room || 'default').slice(0, 32) || 'default';
+    socket.data.isHost = !!host && key === HOST_KEY;
+    socket.data.token = token || null;
 
-  #table {
-    max-width: 1200px; margin: 16px auto 0;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-    gap: 12px;
-  }
-  .seat {
-    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
-    border: 1px solid rgba(255,255,255,.09);
-    border-radius: 14px; padding: 12px;
-    box-shadow: 0 6px 20px rgba(0,0,0,.25);
-    transition: border-color .2s, opacity .2s, filter .2s;
-  }
-  .seat.occupied { border-color: rgba(61,220,132,.35); }
-  .seat.mine {
-    border-color: rgba(212,175,55,.75);
-    box-shadow: 0 0 0 1px rgba(212,175,55,.35), 0 6px 20px rgba(0,0,0,.3);
-  }
-  .seat.folded { opacity: .5; filter: grayscale(.6); }
-  .seat.eliminated { opacity: .35; filter: grayscale(1); }
-  .seat.winner {
-    border-color: #ffd76b;
-    box-shadow: 0 0 0 2px rgba(255,215,107,.4), 0 6px 20px rgba(0,0,0,.3);
-  }
-  .seat:not(.occupied) { opacity: .8; }
-  .seat:not(.occupied) .cards { opacity: .55; }
-
-  .seat-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .seat-idx {
-    width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%;
-    background: rgba(212,175,55,.15); color: #d4af37;
-    font-size: 11px; font-weight: 700;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .seat-name {
-    flex: 1; min-width: 0; font: inherit; font-size: 13.5px; font-weight: 500;
-    background: transparent; border: 1px solid transparent; border-radius: 6px;
-    padding: 3px 6px; color: #e6eef0; outline: none; transition: .15s;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  input.seat-name:focus { background: rgba(255,255,255,.07); border-color: rgba(212,175,55,.5); }
-  input.seat-name:hover { background: rgba(255,255,255,.04); }
-  div.seat-name { color: #cfe0da; }
-  .badge {
-    font-size: 10px; padding: 2px 6px; border-radius: 10px;
-    white-space: nowrap; flex: 0 0 auto;
-  }
-  .badge.green { background: rgba(61,220,132,.15); color: #3ddc84; }
-  .badge.gray { background: rgba(255,255,255,.06); color: #8fa8a0; }
-  .badge.red { background: rgba(255,82,82,.18); color: #ff9c9c; }
-  .badge.gold { background: rgba(255,215,107,.18); color: #ffd76b; }
-
-  .seat-stats {
-    display: flex; gap: 14px; font-size: 12px; color: #8fa8a0;
-    margin-bottom: 8px; padding: 0 2px; flex-wrap: wrap;
-  }
-  .seat-stats b { color: #d4af37; font-weight: 600; }
-  .seat-stats .bet b { color: #3ddc84; }
-
-  .cards { display: flex; gap: 6px; }
-  .card {
-    position: relative; flex: 1 1 0; max-width: 64px; aspect-ratio: 5/7;
-    border-radius: 7px; perspective: 700px;
-  }
-  .card.empty { background: rgba(255,255,255,.035); border: 1px dashed rgba(255,255,255,.1); }
-  .card.empty .card-inner { display: none; }
-  .card-inner {
-    position: absolute; inset: 0; transform-style: preserve-3d;
-    transition: transform .5s cubic-bezier(.4,.15,.2,1);
-  }
-  .card.faceup .card-inner { transform: rotateY(180deg); }
-  .card-back, .card-face {
-    position: absolute; inset: 0; border-radius: 7px;
-    backface-visibility: hidden; -webkit-backface-visibility: hidden;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-  }
-  .card-back {
-    border: 1px solid rgba(255,255,255,.18);
-    background: repeating-linear-gradient(45deg, #1c3a8c 0 5px, #2a4fb5 5px 10px);
-    box-shadow: inset 0 0 0 2px rgba(255,255,255,.08);
-  }
-  .card-face {
-    transform: rotateY(180deg); gap: 1px; color: #15181b;
-    background: linear-gradient(180deg, #fdfdf8, #eceae0);
-    border: 1px solid #cfcbbf; box-shadow: 0 3px 10px rgba(0,0,0,.4);
-  }
-  .card-face .rank { font-size: clamp(11px, 2.2vw, 15px); font-weight: 700; line-height: 1; }
-  .card-face .suit { font-size: clamp(12px, 2.6vw, 17px); line-height: 1; }
-  .card-face .suit.red { color: #d32f2f; }
-
-  .card[data-clickable="1"] { cursor: pointer; }
-  .card[data-clickable="1"]:hover { filter: brightness(1.12); }
-
-  .card.unrevealed::after {
-    content: '暗';
-    position: absolute; top: 2px; right: 2px;
-    font-size: 9px; padding: 1px 3px;
-    background: rgba(0,0,0,.55); color: #ffd76b; border-radius: 3px;
-    z-index: 2;
-  }
-
-  /* 座位内下注行 */
-  .bet-row {
-    display: none;
-    gap: 6px; align-items: center; margin-top: 10px;
-    padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.1);
-    flex-wrap: wrap;
-  }
-  .bet-row.show { display: flex; }
-  .bet-row .bet-label { font-size: 11.5px; color: #8fa8a0; white-space: nowrap; }
-  .bet-row select {
-    font-size: 12px; padding: 4px 6px; border-radius: 6px;
-    background: rgba(255,255,255,.08); color: #e6eef0;
-    border: 1px solid rgba(255,255,255,.16); outline: none;
-  }
-  .bet-row select option { background: #1a2a22; }
-  .bet-row button {
-    font-size: 12px; padding: 5px 10px; border-radius: 6px;
-    background: rgba(61,220,132,.15); border-color: rgba(61,220,132,.4); color: #3ddc84;
-    white-space: nowrap;
-  }
-  .bet-row button:hover:not(:disabled) { background: rgba(61,220,132,.25); }
-  .bet-row button.repeat {
-    background: rgba(212,175,55,.15);
-    border-color: rgba(212,175,55,.45); color: #d4af37;
-  }
-  .bet-row button.repeat:hover:not(:disabled) { background: rgba(212,175,55,.25); }
-
-  .seat-actions {
-    display: none; gap: 6px; margin-top: 8px;
-    flex-wrap: wrap;
-  }
-  .seat-actions.show { display: flex; }
-  .seat-actions button {
-    font-size: 11.5px; padding: 5px 10px; border-radius: 6px;
-  }
-
-  .toast {
-    position: fixed; left: 50%; bottom: 90px; transform: translate(-50%, 20px);
-    background: rgba(20,30,26,.96); border: 1px solid rgba(212,175,55,.4);
-    color: #e6eef0; padding: 9px 18px; border-radius: 20px; font-size: 13px;
-    max-width: 90vw; opacity: 0; pointer-events: none; transition: .25s;
-    z-index: 99; text-align: center;
-  }
-  .toast.show { opacity: 1; transform: translate(-50%, 0); }
-</style>
-</head>
-<body>
-
-<div class="topbar">
-  <div>
-    <span class="brand">♠ 发牌桌</span>
-    <span class="room-tag" id="roomTag"></span>
-  </div>
-  <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中…</span></div>
-</div>
-
-<div id="gameInfo">
-  <span>第 <b id="roundInfo">1/3</b> 轮</span>
-  <span class="sep">|</span>
-  <span>奖池 <b id="potInfo">0</b></span>
-  <span class="sep" id="winnerSep" style="display:none">|</span>
-  <span id="winnerWrap" style="display:none">本轮赢家：<b id="winnerName"></b></span>
-  <span class="sep" id="mySep" style="display:none">|</span>
-  <span id="myChipsWrap" style="display:none">我的筹码 <b id="myChips">40</b></span>
-  <span id="myBetWrap" style="display:none">本轮已下注 <b id="myBet">0</b></span>
-  <span id="myStatusWrap" style="display:none">状态 <b id="myStatus">正常</b></span>
-  <span id="finishedWrap" class="finished" style="display:none">游戏已结束</span>
-</div>
-
-<div id="controls">
-  <div class="ctrl-group">
-    <button data-act="dealOneEach">每人发一张</button>
-    <button data-act="dealAll">一次发完</button>
-    <button data-act="revealAll">全部摊牌</button>
-  </div>
-  <div class="ctrl-group">
-    <button data-act="addSeat">＋座位</button>
-    <button data-act="removeSeat">－座位</button>
-    <button data-act="copy">复制玩家链接</button>
-  </div>
-  <div class="ctrl-group">
-    <button data-act="nextRound" class="win">开始下一轮</button>
-    <button data-act="reset" class="danger">重置游戏</button>
-  </div>
-  <div class="meter">
-    <span>已发 <b id="dealtCount">0</b>/<span id="totalCount">0</span></span>
-    <span>剩余 <b id="remainCount">0</b></span>
-  </div>
-</div>
-
-<div id="seatPicker" style="display:none">
-  <div class="picker-title">选择你要坐的座位</div>
-  <div class="picker-list" id="pickerList"></div>
-</div>
-
-<div id="table"></div>
-
-<div id="myBar">
-  <span>我的座位：<b id="mySeatName">-</b></span>
-  <button id="leaveBtn">让出座位</button>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script src="/socket.io/socket.io.js"></script>
-<script>
-(function () {
-  const qs = new URLSearchParams(location.search);
-  const ROOM = (qs.get('room') || 'default').slice(0, 32) || 'default';
-  const WANT_HOST = qs.get('host') === '1';
-  const KEY = qs.get('key') || '';
-
-  const TOKEN = (function () {
-    let t = localStorage.getItem('poker_token');
-    if (!t) {
-      t = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('poker_token', t);
-    }
-    return t;
-  })();
-
-  let lastState = null;
-  let prevMySeatId = null;
-  const localReveal = new Map();
-  const seatEls = new Map();
-
-  const tableEl = document.getElementById('table');
-  const controlsEl = document.getElementById('controls');
-  const seatPickerEl = document.getElementById('seatPicker');
-  const pickerListEl = document.getElementById('pickerList');
-  const myBarEl = document.getElementById('myBar');
-  const mySeatNameEl = document.getElementById('mySeatName');
-  const gameInfoEl = document.getElementById('gameInfo');
-
-  const socket = io();
-
-  socket.on('connect', () => {
-    setStatus(true);
-    socket.emit('join', { room: ROOM, host: WANT_HOST, key: KEY, token: TOKEN });
-  });
-  socket.on('disconnect', () => setStatus(false));
-
-  socket.on('role', () => {
-    document.getElementById('roomTag').textContent =
-      (WANT_HOST ? '· 主控 · 房间 ' : '· 房间 ') + ROOM;
-  });
-
-  socket.on('state', render);
-  socket.on('seat:error', msg => toast(msg));
-  socket.on('host:msg', msg => toast(msg));
-
-  socket.on('peek:result', ({ seatId, index, rank, suit }) => {
-    localReveal.set(seatId + ':' + index, { rank, suit });
-    if (lastState) render(lastState);
-  });
-
-  /* ---------- 渲染 ---------- */
-  function render(state) {
-    lastState = state;
-
-    if (state.mySeatId !== prevMySeatId) {
-      localReveal.clear();
-      prevMySeatId = state.mySeatId;
-    }
-
-    const isHost = state.role === 'host';
-    const mySeatId = state.mySeatId;
-
-    controlsEl.style.display = isHost ? 'flex' : 'none';
-    seatPickerEl.style.display = (!isHost && mySeatId == null) ? 'block' : 'none';
-    myBarEl.style.display = (!isHost && mySeatId != null) ? 'flex' : 'none';
-    gameInfoEl.style.display = 'flex';
-
-    document.getElementById('roundInfo').textContent = state.round + '/' + state.maxRounds;
-    document.getElementById('potInfo').textContent = state.pot;
-
-    const winnerWrap = document.getElementById('winnerWrap');
-    const winnerSep = document.getElementById('winnerSep');
-    if (state.winnerSeatId != null) {
-      const w = state.seats.find(s => s.id === state.winnerSeatId);
-      if (w) {
-        document.getElementById('winnerName').textContent = w.name;
-        winnerWrap.style.display = '';
-        winnerSep.style.display = '';
-      }
+    // 方案2：如果 socket 恢复成功，socket.data.seatId 已经被保留
+    // 但为了兼容方案1（超过2分钟的重连），仍然用 token 再确认一次座位
+    if (socket.recovered && socket.data.seatId != null) {
+      // 恢复连接：保留原有 seatId
     } else {
-      winnerWrap.style.display = 'none';
-      winnerSep.style.display = 'none';
+      socket.data.seatId = null;
     }
 
-    const mySeat = state.seats.find(s => s.id === mySeatId);
-    const mySep = document.getElementById('mySep');
-    if (mySeat && !isHost) {
-      mySep.style.display = '';
-      document.getElementById('myChipsWrap').style.display = '';
-      document.getElementById('myBetWrap').style.display = '';
-      document.getElementById('myStatusWrap').style.display = '';
-      document.getElementById('myChips').textContent = mySeat.chips;
-      document.getElementById('myBet').textContent = mySeat.bet;
-      let st = '正常';
-      if (mySeat.eliminated) st = '已淘汰';
-      else if (mySeat.folded) st = '已弃牌';
-      document.getElementById('myStatus').textContent = st;
-    } else {
-      mySep.style.display = 'none';
-      document.getElementById('myChipsWrap').style.display = 'none';
-      document.getElementById('myBetWrap').style.display = 'none';
-      document.getElementById('myStatusWrap').style.display = 'none';
+    if (!socket.data.isHost && token) {
+      const r = getRoom(socket.data.room);
+      const seat = r.seats.find(s => s.occupant === token);
+      if (seat) socket.data.seatId = seat.id;
     }
 
-    document.getElementById('finishedWrap').style.display = state.phase === 'finished' ? '' : 'none';
+    socket.join(socket.data.room);
+    socket.emit('role', { isHost: socket.data.isHost });
+    broadcastAll(socket.data.room);
+  });
 
-    if (isHost) {
-      const betting = state.phase === 'betting';
-      const showdown = state.phase === 'showdown';
-      const finished = state.phase === 'finished';
+  socket.on('host:action', (action) => {
+    if (!socket.data.isHost || !socket.data.room) return;
+    const room = getRoom(socket.data.room);
 
-      document.querySelectorAll('[data-act="dealOneEach"],[data-act="dealAll"]')
-        .forEach(b => b.disabled = !betting);
-      document.querySelectorAll('[data-act="revealAll"]')
-        .forEach(b => b.disabled = finished);
+    switch (action.type) {
 
-      const nextBtn = document.querySelector('[data-act="nextRound"]');
-      if (finished) {
-        nextBtn.textContent = '游戏已结束';
-        nextBtn.disabled = true;
-      } else if (showdown) {
-        nextBtn.textContent = state.round >= state.maxRounds ? '结束游戏' : '开始下一轮';
-        nextBtn.disabled = false;
-      } else {
-        nextBtn.textContent = '开始下一轮';
-        nextBtn.disabled = true;
+      case 'dealOneEach':
+        if (room.phase !== 'betting') return;
+        dealOneEach(room);
+        break;
+
+      case 'dealAll':
+        if (room.phase !== 'betting') return;
+        dealAll(room);
+        break;
+
+      case 'revealAll':
+        room.seats.forEach(s => s.cards.forEach(c => { c.faceUp = true; }));
+        break;
+
+      case 'setSeatBet': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '当前不是下注阶段');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat) return;
+        if (seat.eliminated) { socket.emit('host:msg', '该玩家已被淘汰，无法下注'); return; }
+        if (seat.folded) { socket.emit('host:msg', '该玩家已弃牌，无法下注'); return; }
+        const amount = parseInt(action.amount, 10);
+        if (isNaN(amount) || amount < 1 || amount > MAX_BET) {
+          socket.emit('host:msg', `单次下注必须为 1 到 ${MAX_BET} 枚`);
+          return;
+        }
+        if (seat.chips < amount) {
+          socket.emit('host:msg', `该玩家筹码不足（剩余 ${seat.chips}）`);
+          return;
+        }
+        seat.chips -= amount;
+        seat.bet += amount;
+        seat.lastBetAmount = amount;
+        room.pot += amount;
+        break;
       }
 
-      document.getElementById('dealtCount').textContent = state.total - state.remaining;
-      document.getElementById('totalCount').textContent = state.total;
-      document.getElementById('remainCount').textContent = state.remaining;
-    }
-
-    const seen = new Set();
-    state.seats.forEach((seat) => {
-      seen.add(seat.id);
-      let el = seatEls.get(seat.id);
-      if (!el) {
-        el = createSeat(seat.id, isHost);
-        seatEls.set(seat.id, el);
-      }
-      updateSeat(el, seat, state);
-      tableEl.appendChild(el.root);
-    });
-    for (const [id, el] of [...seatEls]) {
-      if (!seen.has(id)) {
-        el.root.remove();
-        seatEls.delete(id);
-      }
-    }
-
-    if (!isHost && mySeatId == null) renderPicker(state);
-
-    if (!isHost && mySeatId != null) {
-      const s = state.seats.find(x => x.id === mySeatId);
-      mySeatNameEl.textContent = s ? s.name : '-';
-    }
-  }
-
-  function createSeat(seatId, isHost) {
-    const root = document.createElement('div');
-    root.className = 'seat';
-
-    const head = document.createElement('div');
-    head.className = 'seat-head';
-
-    const idx = document.createElement('span');
-    idx.className = 'seat-idx';
-    idx.textContent = seatId + 1;
-
-    const nameEl = document.createElement(isHost ? 'input' : 'div');
-    nameEl.className = 'seat-name';
-    if (isHost) {
-      nameEl.maxLength = 20;
-      nameEl.placeholder = '点击修改昵称';
-      let timer = null;
-      nameEl.addEventListener('input', () => {
-        const val = nameEl.value;
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          socket.emit('host:action', { type: 'rename', seatId, name: val });
-        }, 120);
-      });
-    }
-
-    const badge = document.createElement('span');
-    head.append(idx, nameEl, badge);
-
-    const stats = document.createElement('div');
-    stats.className = 'seat-stats';
-    stats.innerHTML = '<span class="chips">筹码 <b>40</b></span>' +
-                      '<span class="bet">本轮下注 <b>0</b></span>';
-
-    const cardsEl = document.createElement('div');
-    cardsEl.className = 'cards';
-    const cards = [];
-    for (let i = 0; i < 5; i++) {
-      const c = document.createElement('div');
-      c.className = 'card empty';
-      c.innerHTML =
-        '<div class="card-inner">' +
-          '<div class="card-back"></div>' +
-          '<div class="card-face"><span class="rank"></span><span class="suit"></span></div>' +
-        '</div>';
-      c.dataset.rank = '';
-      c.dataset.suit = '';
-      c.addEventListener('click', () => handleCardClick(seatId, i));
-      cardsEl.appendChild(c);
-      cards.push(c);
-    }
-
-    /* 下注行（主控可见） */
-    let betRow = null, betSelect = null, betBtn = null, repeatBtn = null;
-    if (isHost) {
-      betRow = document.createElement('div');
-      betRow.className = 'bet-row';
-
-      const lbl = document.createElement('span');
-      lbl.className = 'bet-label';
-      lbl.textContent = '下注';
-
-      betSelect = document.createElement('select');
-      for (let n = 1; n <= 5; n++) {
-        const opt = document.createElement('option');
-        opt.value = String(n);
-        opt.textContent = n + ' 枚';
-        betSelect.appendChild(opt);
+      case 'repeatBet': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '当前不是下注阶段');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat) return;
+        if (seat.eliminated) { socket.emit('host:msg', '该玩家已被淘汰，无法下注'); return; }
+        if (seat.folded) { socket.emit('host:msg', '该玩家已弃牌，无法下注'); return; }
+        const amount = seat.lastBetAmount || 0;
+        if (amount < 1) {
+          socket.emit('host:msg', '该玩家还没有下注记录，无法重复投注');
+          return;
+        }
+        if (seat.chips < amount) {
+          socket.emit('host:msg', `该玩家筹码不足（剩余 ${seat.chips}，上次下注 ${amount}）`);
+          return;
+        }
+        seat.chips -= amount;
+        seat.bet += amount;
+        room.pot += amount;
+        break;
       }
 
-      betBtn = document.createElement('button');
-      betBtn.textContent = '下注';
-      betBtn.addEventListener('click', () => {
-        socket.emit('host:action', {
-          type: 'setSeatBet',
-          seatId,
-          amount: betSelect.value
+      case 'foldSeat': {
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat || seat.eliminated) return;
+        seat.folded = true;
+        break;
+      }
+
+      case 'declareWinner': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '本轮已结算，请开始下一轮');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat || seat.eliminated || seat.folded) {
+          socket.emit('host:msg', '该玩家无法获胜（已弃牌/已淘汰）');
+          return;
+        }
+        seat.chips += room.pot;
+        room.winnerSeatId = seat.id;
+        room.pot = 0;
+        room.phase = 'showdown';
+        break;
+      }
+
+      case 'nextRound': {
+        if (room.phase !== 'showdown') {
+          socket.emit('host:msg', '请先宣布本轮赢家');
+          return;
+        }
+        if (room.round >= MAX_ROUNDS) {
+          room.phase = 'finished';
+          break;
+        }
+        room.round++;
+        room.deck = makeDeck();
+        room.pot = 0;
+        room.winnerSeatId = null;
+        room.phase = 'betting';
+        for (const seat of room.seats) {
+          seat.cards = [];
+          seat.bet = 0;
+          seat.folded = false;
+          if (seat.chips <= 0) seat.eliminated = true;
+        }
+        recalc(room);
+        if (room.seats.every(s => s.eliminated)) room.phase = 'finished';
+        break;
+      }
+
+      case 'reset': {
+        const fresh = createRoom();
+        fresh.seats = room.seats.map(s => ({
+          id: s.id,
+          name: s.name,
+          cards: [],
+          occupant: s.occupant,
+          chips: INITIAL_CHIPS,
+          bet: 0,
+          lastBetAmount: 0,
+          folded: false,
+          eliminated: false
+        }));
+        recalc(fresh);
+        rooms.set(socket.data.room, fresh);
+        break;
+      }
+
+      case 'rename': {
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (seat && typeof action.name === 'string') {
+          seat.name = action.name.slice(0, 20) || `玩家 ${action.seatId + 1}`;
+        }
+        break;
+      }
+
+      case 'toggle': {
+        const seat = room.seats.find(s => s.id === action.seatId);
+        const card = seat && seat.cards[action.index];
+        if (card) card.faceUp = !card.faceUp;
+        break;
+      }
+
+      case 'addSeat': {
+        const nextId = room.seats.length ? Math.max(...room.seats.map(s => s.id)) + 1 : 0;
+        room.seats.push({
+          id: nextId,
+          name: `玩家 ${room.seats.length + 1}`,
+          cards: [],
+          occupant: null,
+          chips: INITIAL_CHIPS,
+          bet: 0,
+          lastBetAmount: 0,
+          folded: false,
+          eliminated: false
         });
-      });
-
-      repeatBtn = document.createElement('button');
-      repeatBtn.className = 'repeat';
-      repeatBtn.textContent = '重复投注';
-      repeatBtn.addEventListener('click', () => {
-        socket.emit('host:action', { type: 'repeatBet', seatId });
-      });
-
-      betRow.append(lbl, betSelect, betBtn, repeatBtn);
-    }
-
-    /* 操作按钮（主控可见） */
-    let actions = null, foldBtn = null, winBtn = null;
-    if (isHost) {
-      actions = document.createElement('div');
-      actions.className = 'seat-actions';
-
-      foldBtn = document.createElement('button');
-      foldBtn.textContent = '弃牌 / 退出本轮';
-      foldBtn.addEventListener('click', () => {
-        if (!confirm('确定让该玩家弃牌、退出本轮牌局吗？')) return;
-        socket.emit('host:action', { type: 'foldSeat', seatId });
-      });
-
-      winBtn = document.createElement('button');
-      winBtn.className = 'win';
-      winBtn.textContent = '设为赢家';
-      winBtn.addEventListener('click', () => {
-        if (!confirm('确定将该玩家设为本轮赢家？奖池将归该玩家。')) return;
-        socket.emit('host:action', { type: 'declareWinner', seatId });
-      });
-
-      actions.append(foldBtn, winBtn);
-    }
-
-    root.append(head, stats, cardsEl);
-    if (betRow) root.append(betRow);
-    if (actions) root.append(actions);
-
-    return { root, nameEl, badge, stats, cards, betRow, betSelect, betBtn, repeatBtn, actions, foldBtn, winBtn };
-  }
-
-  function updateSeat(el, seat, state) {
-    const isHost = state.role === 'host';
-    const isMine = seat.id === state.mySeatId;
-
-    if (el.nameEl.tagName === 'INPUT') {
-      if (document.activeElement !== el.nameEl && el.nameEl.value !== seat.name) {
-        el.nameEl.value = seat.name;
-      }
-    } else if (el.nameEl.textContent !== seat.name) {
-      el.nameEl.textContent = seat.name;
-    }
-
-    el.root.classList.toggle('occupied', !!seat.occupied);
-    el.root.classList.toggle('mine', isMine);
-    el.root.classList.toggle('folded', !!seat.folded && !seat.eliminated);
-    el.root.classList.toggle('eliminated', !!seat.eliminated);
-    el.root.classList.toggle('winner', state.winnerSeatId === seat.id);
-
-    if (seat.eliminated) {
-      el.badge.className = 'badge red';
-      el.badge.textContent = '已淘汰';
-    } else if (state.winnerSeatId === seat.id) {
-      el.badge.className = 'badge gold';
-      el.badge.textContent = '赢家';
-    } else if (seat.folded) {
-      el.badge.className = 'badge red';
-      el.badge.textContent = '已弃牌';
-    } else if (isMine) {
-      el.badge.className = 'badge gold';
-      el.badge.textContent = '我';
-    } else if (seat.occupied) {
-      el.badge.className = 'badge green';
-      el.badge.textContent = '已入座';
-    } else {
-      el.badge.className = 'badge gray';
-      el.badge.textContent = '空位';
-    }
-
-    el.stats.querySelector('.chips b').textContent = seat.chips;
-    el.stats.querySelector('.bet b').textContent = seat.bet;
-
-    for (let i = 0; i < state.cardsPerSeat; i++) {
-      updateCard(el.cards[i], seat.cards[i], {
-        isHost, isMine, seatId: seat.id, index: i,
-        peek: localReveal.get(seat.id + ':' + i) || null
-      });
-    }
-
-    /* 主控：下注行 & 操作按钮 */
-    if (isHost && el.betRow) {
-      el.betRow.classList.add('show');
-      el.actions.classList.add('show');
-
-      const betting = state.phase === 'betting';
-      const canBet = betting && !seat.eliminated && !seat.folded && seat.chips >= 1;
-
-      // 选项禁用：超过剩余筹码的档位不可选
-      Array.from(el.betSelect.options).forEach(opt => {
-        opt.disabled = parseInt(opt.value, 10) > seat.chips;
-      });
-      if (parseInt(el.betSelect.value, 10) > seat.chips) {
-        const maxAllowed = Math.max(1, Math.min(5, seat.chips));
-        el.betSelect.value = String(maxAllowed);
+        recalc(room);
+        break;
       }
 
-      el.betSelect.disabled = !canBet;
-      el.betBtn.disabled = !canBet;
-
-      const last = seat.lastBetAmount || 0;
-      const canRepeat = canBet && last > 0 && seat.chips >= last;
-      el.repeatBtn.disabled = !canRepeat;
-      el.repeatBtn.textContent = last > 0 ? `重复 ${last} 枚` : '重复投注';
-
-      if (el.foldBtn) el.foldBtn.disabled = !betting || seat.eliminated || seat.folded;
-      if (el.winBtn) el.winBtn.disabled = !betting || seat.eliminated || seat.folded;
-    }
-  }
-
-  function updateCard(el, card, opts) {
-    if (!card) {
-      if (!el.classList.contains('empty')) {
-        el.classList.add('empty');
-        el.classList.remove('faceup', 'unrevealed');
-        el.removeAttribute('data-clickable');
-        el.querySelector('.rank').textContent = '';
-        el.querySelector('.suit').textContent = '';
-        el.dataset.rank = '';
-        el.dataset.suit = '';
-      }
-      return;
-    }
-
-    if (el.classList.contains('empty')) {
-      el.classList.remove('empty');
-      el.animate(
-        [{ transform: 'translateY(-20px) scale(.85)', opacity: 0 },
-         { transform: 'none', opacity: 1 }],
-        { duration: 320, easing: 'cubic-bezier(.2,.8,.3,1)' }
-      );
-    }
-
-    let rank = card.rank;
-    let suit = card.suit;
-    let showFace = false;
-    let clickable = false;
-
-    if (opts.isHost) {
-      if (card.rank != null) {
-        showFace = true;
-        clickable = !card.faceUp;
-      }
-    } else if (opts.isMine) {
-      if (card.faceUp) {
-        showFace = true;
-      } else if (opts.peek) {
-        rank = opts.peek.rank;
-        suit = opts.peek.suit;
-        showFace = true;
-        clickable = true;
-      } else {
-        clickable = true;
-      }
-    } else {
-      if (card.faceUp && card.rank != null) showFace = true;
-    }
-
-    if (showFace) {
-      if (el.dataset.rank !== rank || el.dataset.suit !== suit) {
-        el.dataset.rank = rank;
-        el.dataset.suit = suit;
-        el.querySelector('.rank').textContent = rank;
-        const suitEl = el.querySelector('.suit');
-        suitEl.textContent = suit;
-        suitEl.classList.toggle('red', suit === '♥' || suit === '♦');
+      case 'removeSeat': {
+        if (room.seats.length <= 1) {
+          socket.emit('host:msg', '至少保留一个座位');
+          return;
+        }
+        let idx = -1;
+        for (let i = room.seats.length - 1; i >= 0; i--) {
+          if (!room.seats[i].occupant) { idx = i; break; }
+        }
+        if (idx === -1) {
+          socket.emit('host:msg', '所有座位都有人，无法删除');
+          return;
+        }
+        room.seats.splice(idx, 1);
+        recalc(room);
+        break;
       }
     }
+    broadcastAll(socket.data.room);
+  });
 
-    el.classList.toggle('faceup', showFace);
-    el.classList.toggle('unrevealed', opts.isHost && card.rank != null && !card.faceUp);
+  socket.on('player:seat', ({ seatId, token }) => {
+    if (socket.data.isHost || !socket.data.room) return;
+    const room = getRoom(socket.data.room);
+    const seat = room.seats.find(s => s.id === seatId);
+    if (!seat) { socket.emit('seat:error', '座位不存在'); return; }
+    if (seat.eliminated) { socket.emit('seat:error', '该座位玩家已被淘汰'); return; }
+    if (seat.occupant && seat.occupant !== token) {
+      socket.emit('seat:error', '该座位已被其他玩家占用'); return;
+    }
+    if (socket.data.seatId != null && socket.data.seatId !== seatId) {
+      const old = room.seats.find(s => s.id === socket.data.seatId);
+      if (old && old.occupant === socket.data.token) old.occupant = null;
+    }
+    seat.occupant = token;
+    socket.data.token = token;
+    socket.data.seatId = seatId;
+    broadcastAll(socket.data.room);
+  });
 
-    if (clickable) el.setAttribute('data-clickable', '1');
-    else el.removeAttribute('data-clickable');
-  }
-
-  function handleCardClick(seatId, index) {
-    const state = lastState;
-    if (!state) return;
-    const seat = state.seats.find(s => s.id === seatId);
-    if (!seat) return;
-    const card = seat.cards[index];
+  socket.on('player:peek', ({ seatId, index }) => {
+    if (socket.data.isHost) return;
+    if (socket.data.seatId !== seatId) return;
+    const room = getRoom(socket.data.room);
+    const seat = room.seats.find(s => s.id === seatId);
+    const card = seat && seat.cards[index];
     if (!card) return;
-
-    if (state.role === 'host') {
-      if (card.rank != null && !card.faceUp) {
-        socket.emit('host:action', { type: 'toggle', seatId, index });
-      }
-      return;
-    }
-
-    if (state.role === 'player' && seatId === state.mySeatId) {
-      if (card.faceUp) return;
-      const key = seatId + ':' + index;
-      if (localReveal.has(key)) {
-        localReveal.delete(key);
-        render(lastState);
-      } else {
-        socket.emit('player:peek', { seatId, index });
-      }
-    }
-  }
-
-  function renderPicker(state) {
-    pickerListEl.innerHTML = '';
-    state.seats.forEach(seat => {
-      const btn = document.createElement('button');
-      btn.className = 'picker-item';
-      if (seat.eliminated) {
-        btn.classList.add('disabled');
-        btn.disabled = true;
-        btn.textContent = seat.name + '（已淘汰）';
-      } else if (seat.occupied) {
-        btn.classList.add('disabled');
-        btn.disabled = true;
-        btn.textContent = seat.name + '（已入座）';
-      } else {
-        btn.textContent = seat.name + '（空 · 筹码 ' + seat.chips + '）';
-        btn.addEventListener('click', () => {
-          socket.emit('player:seat', { seatId: seat.id, token: TOKEN });
-        });
-      }
-      pickerListEl.appendChild(btn);
-    });
-  }
-
-  document.querySelectorAll('[data-act]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const act = btn.dataset.act;
-      if (act === 'copy') { copyLink(); return; }
-      if (!lastState || lastState.role !== 'host') return;
-      if (btn.disabled) return;
-      if (act === 'reset' && !confirm('确定重置整个游戏？所有玩家筹码将回到 40，轮次从第 1 轮开始。')) return;
-      socket.emit('host:action', { type: act });
-    });
+    socket.emit('peek:result', { seatId, index, rank: card.rank, suit: card.suit });
   });
 
-  document.getElementById('leaveBtn').addEventListener('click', () => {
-    socket.emit('player:leave');
-    localReveal.clear();
+  socket.on('player:leave', () => {
+    if (socket.data.seatId == null) return;
+    const room = getRoom(socket.data.room);
+    const seat = room.seats.find(s => s.id === socket.data.seatId);
+    if (seat && seat.occupant === socket.data.token) seat.occupant = null;
+    socket.data.seatId = null;
+    broadcastAll(socket.data.room);
   });
 
-  function copyLink() {
-    const url = location.origin + location.pathname + '?room=' + encodeURIComponent(ROOM);
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(url)
-        .then(() => toast('玩家链接已复制：' + url))
-        .catch(() => toast('复制失败，请手动复制：' + url));
-    } else {
-      toast('玩家链接：' + url);
-    }
-  }
+  // 方案1：断线后座位保留 DISCONNECT_KEEP_MS（2 小时）
+  socket.on('disconnect', () => {
+    const roomName = socket.data.room;
+    const token = socket.data.token;
+    const seatId = socket.data.seatId;
+    if (!roomName || seatId == null || !token) return;
 
-  function setStatus(online) {
-    document.getElementById('dot').className = 'dot ' + (online ? 'on' : 'off');
-    document.getElementById('statusText').textContent = online ? '已连接' : '连接断开，重连中…';
-  }
+    setTimeout(() => {
+      const room = rooms.get(roomName);
+      if (!room) return;
 
-  let toastTimer;
-  function toast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
-  }
-})();
-</script>
-</body>
-</html>
+      // 检查该 token 是否还有在线连接占着同一个座位
+      const ids = io.sockets.adapter.rooms.get(roomName);
+      let stillOnline = false;
+      if (ids) {
+        for (const id of ids) {
+          const s = io.sockets.sockets.get(id);
+          if (s && s.data.token === token && s.data.seatId === seatId) {
+            stillOnline = true;
+            break;
+          }
+        }
+      }
+      if (!stillOnline) {
+        const seat = room.seats.find(s => s.id === seatId);
+        if (seat && seat.occupant === token) {
+          seat.occupant = null;
+          broadcastAll(roomName);
+        }
+      }
+    }, DISCONNECT_KEEP_MS);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`服务器已启动，端口 ${PORT}`);
+});
+
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
+if (SELF_URL) {
+  setInterval(() => {
+    const client = SELF_URL.startsWith('https') ? https : http;
+    client.get(SELF_URL, res => res.resume()).on('error', () => {});
+  }, 10 * 60 * 1000);
+}
