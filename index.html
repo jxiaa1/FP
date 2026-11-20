@@ -25,7 +25,6 @@
   .dot.on { background: #3ddc84; box-shadow: 0 0 8px #3ddc84; }
   .dot.off { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
 
-  /* 游戏信息栏 */
   #gameInfo {
     max-width: 1200px; margin: 12px auto 0;
     display: none; flex-wrap: wrap; gap: 18px; align-items: center;
@@ -36,7 +35,6 @@
   #gameInfo .sep { color: rgba(255,255,255,.15); }
   #gameInfo .finished { color: #ffd76b; font-weight: 600; }
 
-  /* 主控控制台 */
   #controls {
     max-width: 1200px; margin: 12px auto 0;
     display: none; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -66,7 +64,6 @@
   .meter { margin-left: auto; font-size: 12px; color: #8fa8a0; display: flex; gap: 14px; align-items: center; }
   .meter b { color: #d4af37; font-weight: 600; }
 
-  /* 选座面板 */
   #seatPicker {
     max-width: 1200px; margin: 14px auto 0;
     background: rgba(255,255,255,.05); border: 1px solid rgba(212,175,55,.3);
@@ -84,7 +81,6 @@
     border-color: rgba(255,255,255,.1); background: rgba(255,255,255,.03);
   }
 
-  /* 我的座位栏 */
   #myBar {
     display: none; position: fixed; left: 0; right: 0; bottom: 0;
     background: rgba(12,20,16,.94); backdrop-filter: blur(8px);
@@ -98,10 +94,9 @@
     background: rgba(255,82,82,.15); border-color: rgba(255,82,82,.35); color: #ff9c9c;
   }
 
-  /* 牌桌 */
   #table {
     max-width: 1200px; margin: 16px auto 0;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 12px;
   }
   .seat {
@@ -150,7 +145,6 @@
   .badge.red { background: rgba(255,82,82,.18); color: #ff9c9c; }
   .badge.gold { background: rgba(255,215,107,.18); color: #ffd76b; }
 
-  /* 筹码信息行 */
   .seat-stats {
     display: flex; gap: 14px; font-size: 12px; color: #8fa8a0;
     margin-bottom: 8px; padding: 0 2px;
@@ -200,9 +194,34 @@
     z-index: 2;
   }
 
-  /* 座位操作按钮（主控） */
+  /* 座位内下注行 */
+  .bet-row {
+    display: none;
+    gap: 6px; align-items: center; margin-top: 10px;
+    padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.1);
+  }
+  .bet-row.show { display: flex; }
+  .bet-row .bet-label { font-size: 11.5px; color: #8fa8a0; white-space: nowrap; }
+  .bet-row select {
+    font-size: 12px; padding: 4px 6px; border-radius: 6px;
+    background: rgba(255,255,255,.08); color: #e6eef0;
+    border: 1px solid rgba(255,255,255,.16); outline: none;
+  }
+  .bet-row select option { background: #1a2a22; }
+  .bet-row button {
+    font-size: 12px; padding: 5px 10px; border-radius: 6px;
+    background: rgba(61,220,132,.15); border-color: rgba(61,220,132,.4); color: #3ddc84;
+    white-space: nowrap;
+  }
+  .bet-row button:hover:not(:disabled) { background: rgba(61,220,132,.25); }
+  .bet-row button.rebet {
+    background: rgba(212,175,55,.15);
+    border-color: rgba(212,175,55,.45); color: #d4af37;
+  }
+  .bet-row button.rebet:hover:not(:disabled) { background: rgba(212,175,55,.25); }
+
   .seat-actions {
-    display: none; gap: 6px; margin-top: 10px;
+    display: none; gap: 6px; margin-top: 8px;
     flex-wrap: wrap;
   }
   .seat-actions.show { display: flex; }
@@ -230,7 +249,6 @@
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中…</span></div>
 </div>
 
-<!-- 游戏信息栏 -->
 <div id="gameInfo">
   <span>第 <b id="roundInfo">1/3</b> 轮</span>
   <span class="sep">|</span>
@@ -244,19 +262,7 @@
   <span id="finishedWrap" class="finished" style="display:none">游戏已结束</span>
 </div>
 
-<!-- 主控控制台 -->
 <div id="controls">
-  <div class="ctrl-group">
-    <span class="ctrl-label">下注</span>
-    <select id="betAmount">
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
-      <option value="4">4</option>
-      <option value="5">5</option>
-    </select>
-    <button data-act="setAllBets" class="primary">全体下注</button>
-  </div>
   <div class="ctrl-group">
     <button data-act="dealOneEach">每人发一张</button>
     <button data-act="dealAll">一次发完</button>
@@ -277,16 +283,13 @@
   </div>
 </div>
 
-<!-- 选座面板 -->
 <div id="seatPicker" style="display:none">
   <div class="picker-title">选择你要坐的座位</div>
   <div class="picker-list" id="pickerList"></div>
 </div>
 
-<!-- 牌桌 -->
 <div id="table"></div>
 
-<!-- 我的座位栏 -->
 <div id="myBar">
   <span>我的座位：<b id="mySeatName">-</b></span>
   <button id="leaveBtn">让出座位</button>
@@ -363,7 +366,6 @@
     myBarEl.style.display = (!isHost && mySeatId != null) ? 'flex' : 'none';
     gameInfoEl.style.display = 'flex';
 
-    // 顶部信息栏
     document.getElementById('roundInfo').textContent = state.round + '/' + state.maxRounds;
     document.getElementById('potInfo').textContent = state.pot;
 
@@ -403,13 +405,12 @@
 
     document.getElementById('finishedWrap').style.display = state.phase === 'finished' ? '' : 'none';
 
-    // 主控控制台按钮可用性
     if (isHost) {
       const betting = state.phase === 'betting';
       const showdown = state.phase === 'showdown';
       const finished = state.phase === 'finished';
 
-      document.querySelectorAll('[data-act="dealOneEach"],[data-act="dealAll"],[data-act="setAllBets"]')
+      document.querySelectorAll('[data-act="dealOneEach"],[data-act="dealAll"]')
         .forEach(b => b.disabled = !betting);
       document.querySelectorAll('[data-act="revealAll"]')
         .forEach(b => b.disabled = finished);
@@ -431,7 +432,6 @@
       document.getElementById('remainCount').textContent = state.remaining;
     }
 
-    // 座位渲染
     const seen = new Set();
     state.seats.forEach((seat) => {
       seen.add(seat.id);
@@ -510,28 +510,66 @@
       cards.push(c);
     }
 
-    // 主控操作按钮
-    const actions = document.createElement('div');
-    actions.className = 'seat-actions';
+    /* 下注行（主控可见） */
+    let betRow = null, betSelect = null, betBtn = null;
     if (isHost) {
-      const foldBtn = document.createElement('button');
-      foldBtn.textContent = '弃牌 / 淘汰本轮';
+      betRow = document.createElement('div');
+      betRow.className = 'bet-row';
+
+      const lbl = document.createElement('span');
+      lbl.className = 'bet-label';
+      lbl.textContent = '下注';
+
+      betSelect = document.createElement('select');
+      for (let n = 1; n <= 5; n++) {
+        const opt = document.createElement('option');
+        opt.value = String(n);
+        opt.textContent = n + ' 枚';
+        betSelect.appendChild(opt);
+      }
+
+      betBtn = document.createElement('button');
+      betBtn.textContent = '下注';
+      betBtn.addEventListener('click', () => {
+        socket.emit('host:action', {
+          type: 'setSeatBet',
+          seatId,
+          amount: betSelect.value
+        });
+      });
+
+      betRow.append(lbl, betSelect, betBtn);
+    }
+
+    /* 操作按钮（主控可见） */
+    let actions = null, foldBtn = null, winBtn = null;
+    if (isHost) {
+      actions = document.createElement('div');
+      actions.className = 'seat-actions';
+
+      foldBtn = document.createElement('button');
+      foldBtn.textContent = '弃牌 / 退出本轮';
       foldBtn.addEventListener('click', () => {
         if (!confirm('确定让该玩家弃牌、退出本轮牌局吗？')) return;
         socket.emit('host:action', { type: 'foldSeat', seatId });
       });
-      const winBtn = document.createElement('button');
+
+      winBtn = document.createElement('button');
       winBtn.className = 'win';
       winBtn.textContent = '设为赢家';
       winBtn.addEventListener('click', () => {
         if (!confirm('确定将该玩家设为本轮赢家？奖池将归该玩家。')) return;
         socket.emit('host:action', { type: 'declareWinner', seatId });
       });
+
       actions.append(foldBtn, winBtn);
     }
 
-    root.append(head, stats, cardsEl, actions);
-    return { root, nameEl, badge, stats, cards, actions, foldBtn: actions.querySelector('button'), winBtn: actions.querySelector('.win') };
+    root.append(head, stats, cardsEl);
+    if (betRow) root.append(betRow);
+    if (actions) root.append(actions);
+
+    return { root, nameEl, badge, stats, cards, betRow, betSelect, betBtn, actions, foldBtn, winBtn, lastBet: 0 };
   }
 
   function updateSeat(el, seat, state) {
@@ -552,7 +590,6 @@
     el.root.classList.toggle('eliminated', !!seat.eliminated);
     el.root.classList.toggle('winner', state.winnerSeatId === seat.id);
 
-    // 徽章
     if (seat.eliminated) {
       el.badge.className = 'badge red';
       el.badge.textContent = '已淘汰';
@@ -573,11 +610,9 @@
       el.badge.textContent = '空位';
     }
 
-    // 筹码
     el.stats.querySelector('.chips b').textContent = seat.chips;
     el.stats.querySelector('.bet b').textContent = seat.bet;
 
-    // 牌
     for (let i = 0; i < state.cardsPerSeat; i++) {
       updateCard(el.cards[i], seat.cards[i], {
         isHost, isMine, seatId: seat.id, index: i,
@@ -585,12 +620,42 @@
       });
     }
 
-    // 主控按钮
-    if (isHost) {
+    /* 主控：下注行 & 操作按钮 */
+    if (isHost && el.betRow) {
+      el.betRow.classList.add('show');
       el.actions.classList.add('show');
+
       const betting = state.phase === 'betting';
+      const canBet = betting && !seat.eliminated && !seat.folded && seat.chips >= 1;
       const canAct = betting && !seat.eliminated && !seat.folded;
-      if (el.foldBtn) el.foldBtn.disabled = !betting || seat.eliminated || seat.folded;
+
+      // 同步下拉选择：只有在 seat.bet 真正变化时才覆盖，避免打断正在选择的主控
+      if (el.lastBet !== seat.bet) {
+        el.lastBet = seat.bet;
+        const target = seat.bet > 0 ? String(seat.bet) : '1';
+        if (el.betSelect.value !== target) el.betSelect.value = target;
+      }
+
+      const maxAllowed = Math.min(state.maxBet || 5, Math.max(1, seat.chips + seat.bet));
+      // 若玩家筹码较少，禁用超过可承受的选项
+      Array.from(el.betSelect.options).forEach(opt => {
+        opt.disabled = parseInt(opt.value, 10) > maxAllowed;
+      });
+      if (parseInt(el.betSelect.value, 10) > maxAllowed) {
+        el.betSelect.value = String(maxAllowed);
+      }
+
+      el.betSelect.disabled = !canBet;
+      el.betBtn.disabled = !canBet;
+      if (seat.bet > 0) {
+        el.betBtn.textContent = '改注';
+        el.betBtn.classList.add('rebet');
+      } else {
+        el.betBtn.textContent = '下注';
+        el.betBtn.classList.remove('rebet');
+      }
+
+      if (el.foldBtn) el.foldBtn.disabled = !canAct;
       if (el.winBtn) el.winBtn.disabled = !canAct;
     }
   }
@@ -711,33 +776,22 @@
     });
   }
 
-  /* ---------- 主控按钮 ---------- */
   document.querySelectorAll('[data-act]').forEach(btn => {
     btn.addEventListener('click', () => {
       const act = btn.dataset.act;
       if (act === 'copy') { copyLink(); return; }
       if (!lastState || lastState.role !== 'host') return;
       if (btn.disabled) return;
-
-      if (act === 'setAllBets') {
-        const amount = document.getElementById('betAmount').value;
-        socket.emit('host:action', { type: 'setAllBets', amount });
-        return;
-      }
-
       if (act === 'reset' && !confirm('确定重置整个游戏？所有玩家筹码将回到 40，轮次从第 1 轮开始。')) return;
-
       socket.emit('host:action', { type: act });
     });
   });
 
-  /* ---------- 让出座位 ---------- */
   document.getElementById('leaveBtn').addEventListener('click', () => {
     socket.emit('player:leave');
     localReveal.clear();
   });
 
-  /* ---------- 工具 ---------- */
   function copyLink() {
     const url = location.origin + location.pathname + '?room=' + encodeURIComponent(ROOM);
     if (navigator.clipboard && window.isSecureContext) {
