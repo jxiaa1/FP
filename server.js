@@ -38,6 +38,7 @@ function createRoom() {
     occupant: null,
     chips: INITIAL_CHIPS,
     bet: 0,
+    lastBetAmount: 0,
     folded: false,
     eliminated: false
   }));
@@ -46,7 +47,7 @@ function createRoom() {
     deck: makeDeck(),
     pot: 0,
     round: 1,
-    phase: 'betting', // betting | showdown | finished
+    phase: 'betting',
     winnerSeatId: null
   };
   recalc(room);
@@ -90,6 +91,7 @@ function stateFor(socket) {
       isMine: s.id === mySeat,
       chips: s.chips,
       bet: s.bet,
+      lastBetAmount: s.lastBetAmount || 0,
       folded: s.folded,
       eliminated: s.eliminated,
       cards: s.cards.map(c => {
@@ -113,7 +115,6 @@ function broadcastAll(roomName) {
   }
 }
 
-/* ---------- 发牌 ---------- */
 function dealOneEach(room) {
   for (const seat of room.seats) {
     if (seat.eliminated || seat.folded) continue;
@@ -137,7 +138,6 @@ function dealAll(room) {
   }
 }
 
-/* ---------- 连接 ---------- */
 io.on('connection', (socket) => {
 
   socket.on('join', ({ room, host, key, token }) => {
@@ -157,7 +157,6 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
-  /* ---------- 主控操作 ---------- */
   socket.on('host:action', (action) => {
     if (!socket.data.isHost || !socket.data.room) return;
     const room = getRoom(socket.data.room);
@@ -178,7 +177,7 @@ io.on('connection', (socket) => {
         room.seats.forEach(s => s.cards.forEach(c => { c.faceUp = true; }));
         break;
 
-      /* 单个座位下注 / 改注 */
+      /* 单次下注：累加到该座位本轮下注额 */
       case 'setSeatBet': {
         if (room.phase !== 'betting') {
           socket.emit('host:msg', '当前不是下注阶段');
@@ -196,21 +195,47 @@ io.on('connection', (socket) => {
         }
         const amount = parseInt(action.amount, 10);
         if (isNaN(amount) || amount < 1 || amount > MAX_BET) {
-          socket.emit('host:msg', `下注额必须为 1 到 ${MAX_BET}`);
+          socket.emit('host:msg', `单次下注必须为 1 到 ${MAX_BET} 枚`);
           return;
-        }
-        // 先退回旧注
-        if (seat.bet > 0) {
-          seat.chips += seat.bet;
-          room.pot -= seat.bet;
-          seat.bet = 0;
         }
         if (seat.chips < amount) {
           socket.emit('host:msg', `该玩家筹码不足（剩余 ${seat.chips}）`);
           return;
         }
         seat.chips -= amount;
-        seat.bet = amount;
+        seat.bet += amount;
+        seat.lastBetAmount = amount;
+        room.pot += amount;
+        break;
+      }
+
+      /* 重复投注：按该玩家上次下注金额再下一注 */
+      case 'repeatBet': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '当前不是下注阶段');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat) return;
+        if (seat.eliminated) {
+          socket.emit('host:msg', '该玩家已被淘汰，无法下注');
+          return;
+        }
+        if (seat.folded) {
+          socket.emit('host:msg', '该玩家已弃牌，无法下注');
+          return;
+        }
+        const amount = seat.lastBetAmount || 0;
+        if (amount < 1) {
+          socket.emit('host:msg', '该玩家还没有下注记录，无法重复投注');
+          return;
+        }
+        if (seat.chips < amount) {
+          socket.emit('host:msg', `该玩家筹码不足（剩余 ${seat.chips}，上次下注 ${amount}）`);
+          return;
+        }
+        seat.chips -= amount;
+        seat.bet += amount;
         room.pot += amount;
         break;
       }
@@ -257,6 +282,7 @@ io.on('connection', (socket) => {
           seat.cards = [];
           seat.bet = 0;
           seat.folded = false;
+          // lastBetAmount 保留，下一轮可直接重复上次金额
           if (seat.chips <= 0) seat.eliminated = true;
         }
         recalc(room);
@@ -273,6 +299,7 @@ io.on('connection', (socket) => {
           occupant: s.occupant,
           chips: INITIAL_CHIPS,
           bet: 0,
+          lastBetAmount: 0,
           folded: false,
           eliminated: false
         }));
@@ -305,6 +332,7 @@ io.on('connection', (socket) => {
           occupant: null,
           chips: INITIAL_CHIPS,
           bet: 0,
+          lastBetAmount: 0,
           folded: false,
           eliminated: false
         });
@@ -333,7 +361,6 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
-  /* ---------- 玩家选座 ---------- */
   socket.on('player:seat', ({ seatId, token }) => {
     if (socket.data.isHost || !socket.data.room) return;
     const room = getRoom(socket.data.room);
@@ -353,7 +380,6 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
-  /* ---------- 玩家查看自己的暗牌 ---------- */
   socket.on('player:peek', ({ seatId, index }) => {
     if (socket.data.isHost) return;
     if (socket.data.seatId !== seatId) return;
@@ -364,7 +390,6 @@ io.on('connection', (socket) => {
     socket.emit('peek:result', { seatId, index, rank: card.rank, suit: card.suit });
   });
 
-  /* ---------- 玩家让出座位 ---------- */
   socket.on('player:leave', () => {
     if (socket.data.seatId == null) return;
     const room = getRoom(socket.data.room);
@@ -374,7 +399,6 @@ io.on('connection', (socket) => {
     broadcastAll(socket.data.room);
   });
 
-  /* ---------- 断线 60 秒后释放座位 ---------- */
   socket.on('disconnect', () => {
     const roomName = socket.data.room;
     const token = socket.data.token;
