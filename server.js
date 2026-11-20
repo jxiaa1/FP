@@ -82,6 +82,7 @@ function stateFor(socket) {
     phase: room.phase,
     winnerSeatId: room.winnerSeatId,
     initialChips: INITIAL_CHIPS,
+    maxBet: MAX_BET,
     seats: room.seats.map(s => ({
       id: s.id,
       name: s.name,
@@ -119,7 +120,7 @@ function dealOneEach(room) {
     if (seat.cards.length >= CARDS_PER_SEAT) continue;
     const card = room.deck.pop();
     if (!card) break;
-    card.faceUp = seat.cards.length === 0; // 每人第一张明置
+    card.faceUp = seat.cards.length === 0;
     seat.cards.push(card);
   }
   recalc(room);
@@ -127,7 +128,10 @@ function dealOneEach(room) {
 
 function dealAll(room) {
   let guard = 0;
-  while (room.seats.some(s => !s.eliminated && !s.folded && s.cards.length < CARDS_PER_SEAT) && guard < 1000) {
+  while (
+    room.seats.some(s => !s.eliminated && !s.folded && s.cards.length < CARDS_PER_SEAT) &&
+    guard < 1000
+  ) {
     dealOneEach(room);
     guard++;
   }
@@ -174,26 +178,40 @@ io.on('connection', (socket) => {
         room.seats.forEach(s => s.cards.forEach(c => { c.faceUp = true; }));
         break;
 
-      case 'setAllBets': {
-        if (room.phase !== 'betting') return;
+      /* 单个座位下注 / 改注 */
+      case 'setSeatBet': {
+        if (room.phase !== 'betting') {
+          socket.emit('host:msg', '当前不是下注阶段');
+          return;
+        }
+        const seat = room.seats.find(s => s.id === action.seatId);
+        if (!seat) return;
+        if (seat.eliminated) {
+          socket.emit('host:msg', '该玩家已被淘汰，无法下注');
+          return;
+        }
+        if (seat.folded) {
+          socket.emit('host:msg', '该玩家已弃牌，无法下注');
+          return;
+        }
         const amount = parseInt(action.amount, 10);
         if (isNaN(amount) || amount < 1 || amount > MAX_BET) {
           socket.emit('host:msg', `下注额必须为 1 到 ${MAX_BET}`);
           return;
         }
-        let any = false;
-        for (const seat of room.seats) {
-          if (seat.eliminated || seat.folded) continue;
-          if (seat.chips < amount) {
-            seat.folded = true; // 筹码不足自动弃牌
-            continue;
-          }
-          seat.chips -= amount;
-          seat.bet += amount;
-          room.pot += amount;
-          any = true;
+        // 先退回旧注
+        if (seat.bet > 0) {
+          seat.chips += seat.bet;
+          room.pot -= seat.bet;
+          seat.bet = 0;
         }
-        if (!any) socket.emit('host:msg', '没有玩家可以下注');
+        if (seat.chips < amount) {
+          socket.emit('host:msg', `该玩家筹码不足（剩余 ${seat.chips}）`);
+          return;
+        }
+        seat.chips -= amount;
+        seat.bet = amount;
+        room.pot += amount;
         break;
       }
 
@@ -242,7 +260,6 @@ io.on('connection', (socket) => {
           if (seat.chips <= 0) seat.eliminated = true;
         }
         recalc(room);
-        // 若所有座位都被淘汰则直接结束
         if (room.seats.every(s => s.eliminated)) room.phase = 'finished';
         break;
       }
