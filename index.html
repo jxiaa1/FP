@@ -10,18 +10,13 @@
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     min-height: 100vh;
     color: #e6eef0;
-    padding: 14px 14px 48px;
+    padding: 14px 14px 90px;
     background: radial-gradient(ellipse 80% 60% at 50% -10%, #1b4a3a 0%, #0c231c 45%, #060d0a 100%);
     -webkit-font-smoothing: antialiased;
   }
   .topbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    max-width: 1200px;
-    margin: 0 auto;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; flex-wrap: wrap; max-width: 1200px; margin: 0 auto;
   }
   .brand { font-size: 15px; font-weight: 600; letter-spacing: .5px; color: #d4af37; }
   .room-tag { font-size: 12px; color: #8fa8a0; margin-left: 8px; font-weight: 400; }
@@ -31,28 +26,16 @@
   .dot.off { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
 
   #controls {
-    max-width: 1200px;
-    margin: 14px auto 0;
-    display: none;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    background: rgba(255,255,255,.05);
-    border: 1px solid rgba(255,255,255,.09);
-    border-radius: 12px;
-    padding: 10px 12px;
+    max-width: 1200px; margin: 14px auto 0;
+    display: none; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
+    border-radius: 12px; padding: 10px 12px;
   }
   button {
-    font: inherit;
-    font-size: 13px;
-    padding: 7px 14px;
-    border-radius: 8px;
-    cursor: pointer;
-    border: 1px solid rgba(255,255,255,.16);
-    background: rgba(255,255,255,.08);
-    color: #e6eef0;
-    transition: .15s;
-    white-space: nowrap;
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 8px;
+    cursor: pointer; border: 1px solid rgba(255,255,255,.16);
+    background: rgba(255,255,255,.08); color: #e6eef0;
+    transition: .15s; white-space: nowrap;
   }
   button:hover { background: rgba(255,255,255,.16); }
   button:active { transform: translateY(1px); }
@@ -61,81 +44,100 @@
   .meter { margin-left: auto; font-size: 12px; color: #8fa8a0; display: flex; gap: 14px; align-items: center; }
   .meter b { color: #d4af37; font-weight: 600; }
 
+  /* 选座面板 */
+  #seatPicker {
+    max-width: 1200px; margin: 14px auto 0;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(212,175,55,.3);
+    border-radius: 12px; padding: 12px 14px;
+  }
+  .picker-title { font-size: 13px; color: #d4af37; margin-bottom: 10px; font-weight: 600; }
+  .picker-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .picker-item {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(212,175,55,.4);
+    background: rgba(212,175,55,.1); color: #e6eef0;
+  }
+  .picker-item:hover:not(:disabled) { background: rgba(212,175,55,.22); }
+  .picker-item:disabled, .picker-item.disabled {
+    opacity: .35; cursor: not-allowed;
+    border-color: rgba(255,255,255,.1); background: rgba(255,255,255,.03);
+  }
+
+  /* 我的座位栏 */
+  #myBar {
+    display: none; position: fixed; left: 0; right: 0; bottom: 0;
+    background: rgba(12,20,16,.94); backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255,255,255,.1);
+    padding: 12px 16px; z-index: 50;
+    align-items: center; justify-content: center; gap: 14px; font-size: 13px;
+  }
+  #myBar b { color: #d4af37; }
+  #myBar button {
+    font-size: 12px; padding: 7px 14px;
+    background: rgba(255,82,82,.15); border-color: rgba(255,82,82,.35); color: #ff9c9c;
+  }
+
   #table {
-    max-width: 1200px;
-    margin: 16px auto 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
+    max-width: 1200px; margin: 16px auto 0;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
     gap: 12px;
   }
   .seat {
     background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
     border: 1px solid rgba(255,255,255,.09);
-    border-radius: 14px;
-    padding: 12px;
+    border-radius: 14px; padding: 12px;
     box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    transition: border-color .2s, opacity .2s;
   }
+  .seat.occupied { border-color: rgba(61,220,132,.35); }
+  .seat.mine {
+    border-color: rgba(212,175,55,.75);
+    box-shadow: 0 0 0 1px rgba(212,175,55,.35), 0 6px 20px rgba(0,0,0,.3);
+  }
+  .seat:not(.occupied) { opacity: .8; }
+  .seat:not(.occupied) .cards { opacity: .55; }
+
   .seat-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .seat-idx {
-    width: 22px; height: 22px; flex: 0 0 22px;
-    border-radius: 50%;
-    background: rgba(212,175,55,.15);
-    color: #d4af37;
-    font-size: 11px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%;
+    background: rgba(212,175,55,.15); color: #d4af37;
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
   }
   .seat-name {
-    flex: 1;
-    min-width: 0;
-    font: inherit;
-    font-size: 13.5px;
-    font-weight: 500;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 3px 6px;
-    color: #e6eef0;
-    outline: none;
-    transition: .15s;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    flex: 1; min-width: 0; font: inherit; font-size: 13.5px; font-weight: 500;
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 3px 6px; color: #e6eef0; outline: none; transition: .15s;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   input.seat-name:focus { background: rgba(255,255,255,.07); border-color: rgba(212,175,55,.5); }
   input.seat-name:hover { background: rgba(255,255,255,.04); }
   div.seat-name { color: #cfe0da; }
+  .occupied-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 10px;
+    background: rgba(61,220,132,.15); color: #3ddc84; white-space: nowrap;
+  }
+  .empty-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 10px;
+    background: rgba(255,255,255,.06); color: #8fa8a0; white-space: nowrap;
+  }
 
   .cards { display: flex; gap: 6px; }
   .card {
-    position: relative;
-    flex: 1 1 0;
-    max-width: 64px;
-    aspect-ratio: 5/7;
-    border-radius: 7px;
-    perspective: 700px;
+    position: relative; flex: 1 1 0; max-width: 64px; aspect-ratio: 5/7;
+    border-radius: 7px; perspective: 700px;
   }
   .card.empty { background: rgba(255,255,255,.035); border: 1px dashed rgba(255,255,255,.1); }
   .card.empty .card-inner { display: none; }
   .card-inner {
-    position: absolute;
-    inset: 0;
-    transform-style: preserve-3d;
+    position: absolute; inset: 0; transform-style: preserve-3d;
     transition: transform .5s cubic-bezier(.4,.15,.2,1);
   }
   .card.faceup .card-inner { transform: rotateY(180deg); }
   .card-back, .card-face {
-    position: absolute;
-    inset: 0;
-    border-radius: 7px;
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    position: absolute; inset: 0; border-radius: 7px;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
   .card-back {
     border: 1px solid rgba(255,255,255,.18);
@@ -143,37 +145,32 @@
     box-shadow: inset 0 0 0 2px rgba(255,255,255,.08);
   }
   .card-face {
-    transform: rotateY(180deg);
-    gap: 1px;
-    color: #15181b;
+    transform: rotateY(180deg); gap: 1px; color: #15181b;
     background: linear-gradient(180deg, #fdfdf8, #eceae0);
-    border: 1px solid #cfcbbf;
-    box-shadow: 0 3px 10px rgba(0,0,0,.4);
+    border: 1px solid #cfcbbf; box-shadow: 0 3px 10px rgba(0,0,0,.4);
   }
   .card-face .rank { font-size: clamp(11px, 2.2vw, 15px); font-weight: 700; line-height: 1; }
   .card-face .suit { font-size: clamp(12px, 2.6vw, 17px); line-height: 1; }
   .card-face .suit.red { color: #d32f2f; }
 
-  #table.host .card:not(.empty) { cursor: pointer; }
-  #table.host .card:not(.empty):hover { filter: brightness(1.12); }
+  .card[data-clickable="1"] { cursor: pointer; }
+  .card[data-clickable="1"]:hover { filter: brightness(1.12); }
+
+  /* 主控视角：未公开的暗牌带“暗”标记 */
+  .card.unrevealed::after {
+    content: '暗';
+    position: absolute; top: 2px; right: 2px;
+    font-size: 9px; padding: 1px 3px;
+    background: rgba(0,0,0,.55); color: #ffd76b; border-radius: 3px;
+    z-index: 2;
+  }
 
   .toast {
-    position: fixed;
-    left: 50%;
-    bottom: 26px;
-    transform: translate(-50%, 20px);
-    background: rgba(20,30,26,.96);
-    border: 1px solid rgba(212,175,55,.4);
-    color: #e6eef0;
-    padding: 9px 18px;
-    border-radius: 20px;
-    font-size: 13px;
-    max-width: 90vw;
-    opacity: 0;
-    pointer-events: none;
-    transition: .25s;
-    z-index: 99;
-    text-align: center;
+    position: fixed; left: 50%; bottom: 90px; transform: translate(-50%, 20px);
+    background: rgba(20,30,26,.96); border: 1px solid rgba(212,175,55,.4);
+    color: #e6eef0; padding: 9px 18px; border-radius: 20px; font-size: 13px;
+    max-width: 90vw; opacity: 0; pointer-events: none; transition: .25s;
+    z-index: 99; text-align: center;
   }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
 </style>
@@ -188,19 +185,36 @@
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中…</span></div>
 </div>
 
+<!-- 主控控制台 -->
 <div id="controls">
-  <button class="primary" data-act="dealOne">发一张</button>
+  <button class="primary" data-act="dealOneEach">每人发一张</button>
   <button data-act="dealAll">一次发完</button>
   <button data-act="revealAll">全部摊牌</button>
+  <button data-act="addSeat">＋加座位</button>
+  <button data-act="removeSeat">－减座位</button>
   <button class="danger" data-act="reset">洗牌 / 重置</button>
-  <button data-act="copy">复制观众链接</button>
+  <button data-act="copy">复制玩家链接</button>
   <div class="meter">
     <span>已发 <b id="dealtCount">0</b>/<span id="totalCount">0</span></span>
     <span>剩余 <b id="remainCount">0</b></span>
   </div>
 </div>
 
+<!-- 选座面板（非主控、未选座时显示） -->
+<div id="seatPicker" style="display:none">
+  <div class="picker-title">选择你要坐的座位</div>
+  <div class="picker-list" id="pickerList"></div>
+</div>
+
+<!-- 牌桌 -->
 <div id="table"></div>
+
+<!-- 我的座位栏（玩家已选座时显示） -->
+<div id="myBar">
+  <span>我的座位：<b id="mySeatName">-</b></span>
+  <button id="leaveBtn">让出座位</button>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -211,71 +225,101 @@
   const WANT_HOST = qs.get('host') === '1';
   const KEY = qs.get('key') || '';
 
-  let IS_HOST = false;
-  let SEAT_COUNT = 7;
-  let CARDS_PER_SEAT = 5;
+  // 每个玩家一个持久 token，刷新后能坐回原位
+  const TOKEN = (function () {
+    let t = localStorage.getItem('poker_token');
+    if (!t) {
+      t = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('poker_token', t);
+    }
+    return t;
+  })();
+
   let lastState = null;
+  let prevMySeatId = null;
+  // 玩家自己本地翻开的暗牌：key -> {rank, suit}
+  const localReveal = new Map();
+  const seatEls = new Map();
 
   const tableEl = document.getElementById('table');
   const controlsEl = document.getElementById('controls');
-  const seatEls = new Map();
+  const seatPickerEl = document.getElementById('seatPicker');
+  const pickerListEl = document.getElementById('pickerList');
+  const myBarEl = document.getElementById('myBar');
+  const mySeatNameEl = document.getElementById('mySeatName');
 
   const socket = io();
 
   socket.on('connect', () => {
     setStatus(true);
-    socket.emit('join', { room: ROOM, host: WANT_HOST, key: KEY });
+    socket.emit('join', { room: ROOM, host: WANT_HOST, key: KEY, token: TOKEN });
   });
   socket.on('disconnect', () => setStatus(false));
 
-  socket.on('role', (info) => {
-    IS_HOST = !!info.isHost;
-    SEAT_COUNT = info.seats;
-    CARDS_PER_SEAT = info.cardsPerSeat;
-
-    controlsEl.style.display = IS_HOST ? 'flex' : 'none';
-    document.getElementById('totalCount').textContent = SEAT_COUNT * CARDS_PER_SEAT;
-    tableEl.classList.toggle('host', IS_HOST);
+  socket.on('role', () => {
     document.getElementById('roomTag').textContent =
-      (IS_HOST ? '· 主控 · 房间 ' : '· 观众 · 房间 ') + ROOM;
-
-    if (WANT_HOST && !IS_HOST) toast('主控密码不正确，当前为观众模式');
-
-    seatEls.clear();
-    tableEl.innerHTML = '';
+      (WANT_HOST ? '· 主控 · 房间 ' : '· 房间 ') + ROOM;
   });
 
   socket.on('state', render);
+  socket.on('seat:error', msg => toast(msg));
+  socket.on('host:msg', msg => toast(msg));
 
+  socket.on('peek:result', ({ seatId, index, rank, suit }) => {
+    localReveal.set(seatId + ':' + index, { rank, suit });
+    if (lastState) render(lastState);
+  });
+
+  /* ---------- 渲染 ---------- */
   function render(state) {
     lastState = state;
 
-    state.seats.forEach(seat => {
-      let el = seatEls.get(seat.id);
-      if (!el) {
-        el = createSeat(seat.id);
-        seatEls.set(seat.id, el);
-        tableEl.appendChild(el.root);
-      }
+    // 换座或退出时清空本地翻开记录
+    if (state.mySeatId !== prevMySeatId) {
+      localReveal.clear();
+      prevMySeatId = state.mySeatId;
+    }
 
-      if (el.nameEl.tagName === 'INPUT') {
-        if (document.activeElement !== el.nameEl && el.nameEl.value !== seat.name) {
-          el.nameEl.value = seat.name;
-        }
-      } else if (el.nameEl.textContent !== seat.name) {
-        el.nameEl.textContent = seat.name;
-      }
+    const isHost = state.role === 'host';
+    const mySeatId = state.mySeatId;
 
-      for (let i = 0; i < CARDS_PER_SEAT; i++) {
-        updateCard(el.cards[i], seat.cards[i]);
-      }
-    });
+    controlsEl.style.display = isHost ? 'flex' : 'none';
+    seatPickerEl.style.display = (!isHost && mySeatId == null) ? 'block' : 'none';
+    myBarEl.style.display = (!isHost && mySeatId != null) ? 'flex' : 'none';
 
     document.getElementById('dealtCount').textContent = state.total - state.remaining;
+    document.getElementById('totalCount').textContent = state.total;
     document.getElementById('remainCount').textContent = state.remaining;
+
+    // 座位
+    const seen = new Set();
+    state.seats.forEach((seat) => {
+      seen.add(seat.id);
+      let el = seatEls.get(seat.id);
+      if (!el) {
+        el = createSeat(seat.id, isHost);
+        seatEls.set(seat.id, el);
+      }
+      updateSeat(el, seat, state);
+      tableEl.appendChild(el.root); // 保证顺序
+    });
+    // 清理已删除的座位
+    for (const [id, el] of [...seatEls]) {
+      if (!seen.has(id)) {
+        el.root.remove();
+        seatEls.delete(id);
+      }
+    }
+
+    if (!isHost && mySeatId == null) renderPicker(state);
+
+    if (!isHost && mySeatId != null) {
+      const s = state.seats.find(x => x.id === mySeatId);
+      mySeatNameEl.textContent = s ? s.name : '-';
+    }
   }
 
-  function createSeat(seatId) {
+  function createSeat(seatId, isHost) {
     const root = document.createElement('div');
     root.className = 'seat';
 
@@ -286,10 +330,10 @@
     idx.className = 'seat-idx';
     idx.textContent = seatId + 1;
 
-    let nameEl;
-    if (IS_HOST) {
-      nameEl = document.createElement('input');
-      nameEl.className = 'seat-name';
+    const nameEl = document.createElement(isHost ? 'input' : 'div');
+    nameEl.className = 'seat-name';
+
+    if (isHost) {
       nameEl.maxLength = 20;
       nameEl.placeholder = '点击修改昵称';
       let timer = null;
@@ -297,21 +341,24 @@
         const val = nameEl.value;
         clearTimeout(timer);
         timer = setTimeout(() => {
-          socket.emit('host:action', { type: 'rename', seatId, name: val });
+          socket.emit('host:action', {
+            type: 'rename',
+            seatId,
+            name: val
+          });
         }, 120);
       });
-    } else {
-      nameEl = document.createElement('div');
-      nameEl.className = 'seat-name';
     }
 
-    head.append(idx, nameEl);
+    const badge = document.createElement('span');
+
+    head.append(idx, nameEl, badge);
 
     const cardsEl = document.createElement('div');
     cardsEl.className = 'cards';
 
     const cards = [];
-    for (let i = 0; i < CARDS_PER_SEAT; i++) {
+    for (let i = 0; i < 5; i++) {
       const c = document.createElement('div');
       c.className = 'card empty';
       c.innerHTML =
@@ -321,30 +368,66 @@
         '</div>';
       c.dataset.rank = '';
       c.dataset.suit = '';
-
-      if (IS_HOST) {
-        c.addEventListener('click', () => {
-          if (c.classList.contains('empty')) return;
-          socket.emit('host:action', { type: 'toggle', seatId, index: i });
-        });
-      }
+      c.addEventListener('click', () => handleCardClick(seatId, i));
       cardsEl.appendChild(c);
       cards.push(c);
     }
 
     root.append(head, cardsEl);
-    return { root, nameEl, cards };
+    return { root, nameEl, badge, cards };
   }
 
-  function updateCard(el, card) {
+  function updateSeat(el, seat, state) {
+    const isHost = state.role === 'host';
+    const isMine = seat.id === state.mySeatId;
+
+    // 昵称
+    if (el.nameEl.tagName === 'INPUT') {
+      if (document.activeElement !== el.nameEl && el.nameEl.value !== seat.name) {
+        el.nameEl.value = seat.name;
+      }
+    } else if (el.nameEl.textContent !== seat.name) {
+      el.nameEl.textContent = seat.name;
+    }
+
+    // 占用 / 我的
+    el.root.classList.toggle('occupied', !!seat.occupied);
+    el.root.classList.toggle('mine', isMine);
+
+    // 右上角徽标
+    if (isMine) {
+      el.badge.className = 'occupied-badge';
+      el.badge.textContent = '我';
+    } else if (seat.occupied) {
+      el.badge.className = 'occupied-badge';
+      el.badge.textContent = '已入座';
+    } else {
+      el.badge.className = 'empty-badge';
+      el.badge.textContent = '空位';
+    }
+
+    // 牌
+    for (let i = 0; i < state.cardsPerSeat; i++) {
+      updateCard(el.cards[i], seat.cards[i], {
+        isHost,
+        isMine,
+        seatId: seat.id,
+        index: i,
+        peek: localReveal.get(seat.id + ':' + i) || null
+      });
+    }
+  }
+
+  function updateCard(el, card, opts) {
     if (!card) {
       if (!el.classList.contains('empty')) {
         el.classList.add('empty');
-        el.classList.remove('faceup');
-        el.dataset.rank = '';
-        el.dataset.suit = '';
+        el.classList.remove('faceup', 'unrevealed');
+        el.removeAttribute('data-clickable');
         el.querySelector('.rank').textContent = '';
         el.querySelector('.suit').textContent = '';
+        el.dataset.rank = '';
+        el.dataset.suit = '';
       }
       return;
     }
@@ -358,42 +441,135 @@
       );
     }
 
-    if (card.faceUp) {
-      if (el.dataset.rank !== card.rank || el.dataset.suit !== card.suit) {
-        el.dataset.rank = card.rank;
-        el.dataset.suit = card.suit;
-        const rankEl = el.querySelector('.rank');
-        const suitEl = el.querySelector('.suit');
-        rankEl.textContent = card.rank;
-        suitEl.textContent = card.suit;
-        suitEl.classList.toggle('red', card.suit === '♥' || card.suit === '♦');
+    let rank = card.rank;
+    let suit = card.suit;
+    let showFace = false;
+    let clickable = false;
+
+    if (opts.isHost) {
+      // 主控：能看到所有牌；未公开的牌带“暗”标记，可点击公开
+      if (card.rank != null) {
+        showFace = true;
+        clickable = !card.faceUp;
       }
-      el.classList.add('faceup');
+    } else if (opts.isMine) {
+      // 我的座位：公开牌直接看；暗牌需点击后向服务端请求查看
+      if (card.faceUp) {
+        showFace = true;
+      } else if (opts.peek) {
+        rank = opts.peek.rank;
+        suit = opts.peek.suit;
+        showFace = true;
+        clickable = true; // 已翻开，可再点收起
+      } else {
+        clickable = true; // 未翻开，可点击查看
+      }
     } else {
-      el.classList.remove('faceup');
+      // 其他人的座位：只能看到公开牌
+      if (card.faceUp && card.rank != null) showFace = true;
+    }
+
+    // 更新牌面内容
+    if (showFace) {
+      if (el.dataset.rank !== rank || el.dataset.suit !== suit) {
+        el.dataset.rank = rank;
+        el.dataset.suit = suit;
+        el.querySelector('.rank').textContent = rank;
+        const suitEl = el.querySelector('.suit');
+        suitEl.textContent = suit;
+        suitEl.classList.toggle('red', suit === '♥' || suit === '♦');
+      }
+    }
+
+    el.classList.toggle('faceup', showFace);
+    el.classList.toggle('unrevealed', opts.isHost && card.rank != null && !card.faceUp);
+
+    if (clickable) el.setAttribute('data-clickable', '1');
+    else el.removeAttribute('data-clickable');
+  }
+
+  function handleCardClick(seatId, index) {
+    const state = lastState;
+    if (!state) return;
+    const seat = state.seats.find(s => s.id === seatId);
+    if (!seat) return;
+    const card = seat.cards[index];
+    if (!card) return;
+
+    if (state.role === 'host') {
+      // 主控：点击未公开的暗牌 → 向所有人公开
+      if (card.rank != null && !card.faceUp) {
+        socket.emit('host:action', { type: 'toggle', seatId, index });
+      }
+      return;
+    }
+
+    if (state.role === 'player' && seatId === state.mySeatId) {
+      if (card.faceUp) return; // 已公开的牌不用再点
+      const key = seatId + ':' + index;
+      if (localReveal.has(key)) {
+        // 已翻开 → 收起
+        localReveal.delete(key);
+        render(lastState);
+      } else {
+        // 未翻开 → 请求服务端查看
+        socket.emit('player:peek', { seatId, index });
+      }
     }
   }
 
+  /* ---------- 选座面板 ---------- */
+  function renderPicker(state) {
+    pickerListEl.innerHTML = '';
+    state.seats.forEach(seat => {
+      const btn = document.createElement('button');
+      btn.className = 'picker-item';
+      if (seat.occupied) {
+        btn.classList.add('disabled');
+        btn.disabled = true;
+        btn.textContent = seat.name + '（已入座）';
+      } else {
+        btn.textContent = seat.name + '（空）';
+        btn.addEventListener('click', () => {
+          socket.emit('player:seat', { seatId: seat.id, token: TOKEN });
+        });
+      }
+      pickerListEl.appendChild(btn);
+    });
+  }
+
+  /* ---------- 主控按钮 ---------- */
   document.querySelectorAll('[data-act]').forEach(btn => {
     btn.addEventListener('click', () => {
       const act = btn.dataset.act;
       if (act === 'copy') { copyLink(); return; }
-      if (!IS_HOST) return;
-      if (act === 'reset' && lastState && lastState.total - lastState.remaining > 0) {
-        if (!confirm('确定重新洗牌并清空所有牌吗？')) return;
+      if (!lastState || lastState.role !== 'host') return;
+
+      if (act === 'reset' &&
+          lastState.total - lastState.remaining > 0 &&
+          !confirm('确定重新洗牌并清空所有牌吗？')) {
+        return;
       }
       socket.emit('host:action', { type: act });
     });
   });
 
+  /* ---------- 让出座位 ---------- */
+  document.getElementById('leaveBtn').addEventListener('click', () => {
+    socket.emit('player:leave');
+    localReveal.clear();
+  });
+
+  /* ---------- 工具 ---------- */
   function copyLink() {
-    const url = location.origin + location.pathname + '?room=' + encodeURIComponent(ROOM);
+    const url = location.origin + location.pathname +
+      '?room=' + encodeURIComponent(ROOM);
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(url)
-        .then(() => toast('观众链接已复制：' + url))
+        .then(() => toast('玩家链接已复制：' + url))
         .catch(() => toast('复制失败，请手动复制：' + url));
     } else {
-      toast('观众链接：' + url);
+      toast('玩家链接：' + url);
     }
   }
 
@@ -409,7 +585,7 @@
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
   }
 })();
 </script>
